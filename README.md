@@ -32,12 +32,13 @@ trade.xyz(Hyperliquid xyz dex)의 SK하이닉스(`xyz:SKHX`)·삼성전자(`xyz:
    ```
    응답의 `message.chat.id` 가 `TELEGRAM_CHAT_ID`.
 
-## EC2 배포 (Ubuntu 기준)
+## EC2 배포 (Amazon Linux 2023, ec2-user 기준)
 
 ```bash
-ssh ubuntu@<EC2_IP>
+ssh -i <키>.pem ec2-user@<EC2_IP>
 
 # 코드 받기
+sudo dnf install -y git
 git clone https://github.com/myungjungcrypto/hynix_samsung_premium.git
 cd hynix_samsung_premium
 python3 -m venv venv

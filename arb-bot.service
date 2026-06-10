@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/hynix_samsung_premium
-EnvironmentFile=/home/ubuntu/hynix_samsung_premium/.env
-ExecStart=/home/ubuntu/hynix_samsung_premium/venv/bin/python /home/ubuntu/hynix_samsung_premium/arb_bot.py
+User=ec2-user
+WorkingDirectory=/home/ec2-user/hynix_samsung_premium
+EnvironmentFile=/home/ec2-user/hynix_samsung_premium/.env
+ExecStart=/home/ec2-user/hynix_samsung_premium/venv/bin/python /home/ec2-user/hynix_samsung_premium/arb_bot.py
 Restart=always
 RestartSec=10
 
