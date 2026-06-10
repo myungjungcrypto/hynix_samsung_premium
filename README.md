@@ -35,11 +35,11 @@ trade.xyz(Hyperliquid xyz dex)의 SK하이닉스(`xyz:SKHX`)·삼성전자(`xyz:
 ## EC2 배포 (Ubuntu 기준)
 
 ```bash
-# 코드 업로드
-scp -r sk_samsung_funding ubuntu@<EC2_IP>:/home/ubuntu/
-
 ssh ubuntu@<EC2_IP>
-cd ~/sk_samsung_funding
+
+# 코드 받기
+git clone https://github.com/myungjungcrypto/hynix_samsung_premium.git
+cd hynix_samsung_premium
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 

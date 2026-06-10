@@ -6,9 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/sk_samsung_funding
-EnvironmentFile=/home/ubuntu/sk_samsung_funding/.env
-ExecStart=/home/ubuntu/sk_samsung_funding/venv/bin/python /home/ubuntu/sk_samsung_funding/arb_bot.py
+WorkingDirectory=/home/ubuntu/hynix_samsung_premium
+EnvironmentFile=/home/ubuntu/hynix_samsung_premium/.env
+ExecStart=/home/ubuntu/hynix_samsung_premium/venv/bin/python /home/ubuntu/hynix_samsung_premium/arb_bot.py
 Restart=always
 RestartSec=10
 
