@@ -1,0 +1,10 @@
+# 비밀 정보 — 절대 커밋 금지
+.env
+
+# 런타임 상태
+state.json
+
+# Python
+__pycache__/
+*.pyc
+venv/

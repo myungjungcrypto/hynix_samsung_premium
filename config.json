@@ -1,0 +1,35 @@
+{
+  "pairs": [
+    {
+      "key": "SKHX",
+      "name": "SK하이닉스",
+      "hl_coin": "xyz:SKHX",
+      "krx_code": "000660",
+      "entry_threshold": 0.01,
+      "exit_threshold": 0.001
+    },
+    {
+      "key": "SMSN",
+      "name": "삼성전자",
+      "hl_coin": "xyz:SMSN",
+      "krx_code": "005930",
+      "entry_threshold": 0.01,
+      "exit_threshold": 0.001
+    }
+  ],
+  "poll_interval_sec": 15,
+  "alert_cooldown_sec": 1800,
+  "error_alert_after": 5,
+  "session_start": "08:00",
+  "session_end": "20:00",
+  "krx_holidays": [
+    "2026-08-17",
+    "2026-09-24",
+    "2026-09-25",
+    "2026-09-28",
+    "2026-10-05",
+    "2026-10-09",
+    "2026-12-25",
+    "2026-12-31"
+  ]
+}
