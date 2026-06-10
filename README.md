@@ -32,35 +32,39 @@ trade.xyz(Hyperliquid xyz dex)의 SK하이닉스(`xyz:SKHX`)·삼성전자(`xyz:
    ```
    응답의 `message.chat.id` 가 `TELEGRAM_CHAT_ID`.
 
-## EC2 배포 (Amazon Linux 2023, ec2-user 기준)
+## EC2 배포 (Amazon Linux 2023, pm2)
 
 ```bash
 ssh -i <키>.pem ec2-user@<EC2_IP>
 
-# 코드 받기
-sudo dnf install -y git
+# 코드 받기 (깃헙이 저장소 — 업데이트는 git pull)
 git clone https://github.com/myungjungcrypto/hynix_samsung_premium.git
 cd hynix_samsung_premium
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
-# 환경변수 설정
+# 환경변수 설정 (.env 는 봇이 직접 읽음)
 cp .env.example .env
 vi .env   # 토큰, chat id 입력
 chmod 600 .env
 
 # 동작 테스트 (텔레그램으로 "봇 시작됨" 메시지가 와야 함)
-set -a; source .env; set +a
 venv/bin/python arb_bot.py
-# Ctrl+C 로 종료 후 서비스 등록
+# Ctrl+C 로 종료 후 pm2 등록
 
-# systemd 등록 (재부팅·크래시 시 자동 재시작)
-sudo cp arb-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now arb-bot
+# pm2 등록 (크래시 시 자동 재시작)
+pm2 start ecosystem.config.js
+pm2 save                 # 재부팅 후에도 자동 시작 (pm2 startup 설정이 안 돼 있으면 안내대로 한번 실행)
 
 # 로그 확인
-journalctl -u arb-bot -f
+pm2 logs arb-bot
+pm2 status
+```
+
+업데이트 배포:
+
+```bash
+cd ~/hynix_samsung_premium && git pull && pm2 restart arb-bot
 ```
 
 서버 시간대는 무관하다(코드가 항상 `Asia/Seoul` 기준으로 판단).

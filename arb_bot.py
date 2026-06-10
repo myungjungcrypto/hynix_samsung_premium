@@ -55,7 +55,22 @@ log = logging.getLogger("arb")
 
 # ---------------------------------------------------------------- config / state
 
+def load_dotenv():
+    """같은 폴더의 .env 를 환경변수로 로드 (이미 설정된 값은 유지)."""
+    path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
 def load_config():
+    load_dotenv()
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
     cfg["telegram_token"] = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_token", "")
