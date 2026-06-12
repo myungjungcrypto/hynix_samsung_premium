@@ -215,7 +215,7 @@ class Telegram:
                 self.offset = max(self.offset, u["update_id"])
                 msg = u.get("message") or {}
                 text = (msg.get("text") or "").strip()
-                if text.startswith("/") and str(msg.get("chat", {}).get("id")) == self.chat_id:
+                if text and str(msg.get("chat", {}).get("id")) == self.chat_id:
                     cmds.append(text)
         except Exception as e:
             log.warning("telegram getUpdates 실패: %s", e)
@@ -242,14 +242,14 @@ def fmt_status_line(pair, p):
     return (
         f"<b>{pair['name']}</b>{sess}\n"
         f"  perp {p['perp_mid_krw']:,.0f}원 / 현물 {p['spot']:,.0f}원\n"
-        f"  프리미엄 {p['mid_prem']*100:+.2f}% (진입기준 {p['entry_prem']*100:+.2f}%)"
+        f"  프리미엄 {p['mid_prem']*100:+.2f}% (숏진입 {p['entry_prem']*100:+.2f}% / 청산 {p['exit_prem']*100:+.2f}%)"
     )
 
 
 def handle_commands(tg, cmds, cfg, state, session):
     for cmd in cmds:
         parts = cmd.split()
-        name = parts[0].lower().lstrip("/")
+        name = parts[0].lower().lstrip("/")  # "/status" 와 "status" 모두 허용
         if name == "status":
             try:
                 fx, fx_src = fetch_usdkrw(session)
