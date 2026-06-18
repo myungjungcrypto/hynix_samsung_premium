@@ -296,8 +296,9 @@ def check_pair(tg, cfg, state, pair, p, now_ts):
                 f"perp(bid) 환산 {p['entry_prem']*p['spot']+p['spot']:,.0f}원 / 현물 {p['spot']:,.0f}원\n"
                 f"환율 {p['fx']:,.1f}\n"
                 f"→ trade.xyz 숏 + 현물 매수\n"
-                f"진입했으면 /open {key} 보내주세요 (청산 알림 활성화)"
+                f"(자동으로 진입상태 전환 — 실제로 안 들어갔으면 flat {key})"
             )
+            st["position"] = "open"          # 자동 전환: 이제 청산 알림 감시
             st["last_alert_ts"] = now_ts
             save_state(state)
 
@@ -307,8 +308,9 @@ def check_pair(tg, cfg, state, pair, p, now_ts):
                 f"✅ <b>[청산] {pair['name']}</b> [{p.get('session', '')}]\n"
                 f"프리미엄 {p['exit_prem']*100:+.2f}% (기준 {exit_th*100:.2f}% 이하)\n"
                 f"→ 숏 청산 + 현물 매도\n"
-                f"청산했으면 /flat {key} 보내주세요 (다음 진입 알림 활성화)"
+                f"(자동으로 청산상태 전환 — 아직 보유 중이면 open {key})"
             )
+            st["position"] = "flat"          # 자동 전환: 다시 진입 알림 감시
             st["last_alert_ts"] = now_ts
             save_state(state)
 
