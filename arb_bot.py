@@ -278,7 +278,7 @@ def handle_commands(tg, cmds, cfg, state, session):
             save_state(state)
             tg.send(f"✅ {matched[0]['name']} 상태 → {state[key]['position']}")
         else:
-            tg.send("명령: /status, /open <KEY>, /flat <KEY>")
+            tg.send("명령: status / open SKHX / flat SKHX (open·flat은 종목 SKHX 또는 SMSN)")
 
 
 def check_pair(tg, cfg, state, pair, p, now_ts):
