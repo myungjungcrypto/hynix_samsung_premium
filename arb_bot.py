@@ -125,12 +125,18 @@ def fetch_spot(session, code):
 
     over = d.get("overMarketPriceInfo") or {}
     if over.get("overMarketStatus") == "OPEN" and over.get("overPrice"):
-        # stale 가드: NXT 개장 직후 첫 체결 전에는 전일 가격이 그대로 남아있음
-        # (localTradedAt이 오늘 날짜가 아니면 아직 오늘 체결이 없는 것 → 노이즈)
-        traded_at = (over.get("localTradedAt") or "")[:10]
-        today = datetime.now(KST).strftime("%Y-%m-%d")
-        if traded_at != today:
-            return float(over["overPrice"].replace(",", "")), False, "NXT 개장전(스테일)"
+        # stale 가드: 네이버는 NXT 세션 상태를 OPEN으로 두고 마지막 체결가를 계속 반환함.
+        # - 아침 08:00 개장 직후: 전일 체결가 잔존 (localTradedAt = 전일)
+        # - 15:20(NXT 메인 종료)~15:40(애프터 개장): 15:20 체결가 잔존
+        # → localTradedAt(실체결 시각)이 최근 N초 이내일 때만 체결 가능으로 판정
+        max_age = 180  # 초. NXT 얇은 유동성 감안한 기본값
+        try:
+            traded_dt = datetime.fromisoformat(over.get("localTradedAt", ""))
+            age = (datetime.now(KST) - traded_dt).total_seconds()
+        except (ValueError, TypeError):
+            age = None
+        if age is None or age > max_age:
+            return float(over["overPrice"].replace(",", "")), False, "NXT 스테일(최근체결없음)"
         label = {
             "PRE_MARKET": "NXT 프리마켓",
             "AFTER_MARKET": "NXT 애프터마켓",
