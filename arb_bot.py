@@ -125,6 +125,12 @@ def fetch_spot(session, code):
 
     over = d.get("overMarketPriceInfo") or {}
     if over.get("overMarketStatus") == "OPEN" and over.get("overPrice"):
+        # stale 가드: NXT 개장 직후 첫 체결 전에는 전일 가격이 그대로 남아있음
+        # (localTradedAt이 오늘 날짜가 아니면 아직 오늘 체결이 없는 것 → 노이즈)
+        traded_at = (over.get("localTradedAt") or "")[:10]
+        today = datetime.now(KST).strftime("%Y-%m-%d")
+        if traded_at != today:
+            return float(over["overPrice"].replace(",", "")), False, "NXT 개장전(스테일)"
         label = {
             "PRE_MARKET": "NXT 프리마켓",
             "AFTER_MARKET": "NXT 애프터마켓",
