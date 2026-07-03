@@ -10,3 +10,4 @@ __pycache__/
 venv/
 logs/
 autotrader/state.json
+STRATEGY_GUIDE.md
