@@ -13,11 +13,13 @@
     "entry_threshold": 0.01,
     "exit_threshold": 0.0,
     "max_contracts": 1,
-    "alert_cooldown_sec": 600
+    "alert_cooldown_sec": 600,
+    "max_fut_spread": 0.003,
+    "premium_sanity": 0.05
   },
   "session": {
     "start": "08:45",
-    "end": "15:45",
+    "end": "15:34",
     "roll_days_before_expiry": 2
   },
   "hyperliquid": {

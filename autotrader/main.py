@@ -120,12 +120,35 @@ class Engine:
         exit_ = self.perp_ask * self.fx / self.fut_bid - 1
         return entry, exit_
 
+    def quotes_sane(self):
+        """단일가(경매) 구간·장애 시 나타나는 비정상 호가 차단.
+
+        - 호가 역전(ask <= bid): 경매 호가장 특성 — 체결가능가 아님
+        - 스프레드 과대: 유동성 붕괴/스트림 오류
+        """
+        strat = self.cfg["strategy"]
+        if self.fut_ask <= self.fut_bid or self.perp_ask <= self.perp_bid:
+            return False
+        fut_mid = (self.fut_ask + self.fut_bid) / 2
+        if (self.fut_ask - self.fut_bid) / fut_mid > strat.get("max_fut_spread", 0.003):
+            return False
+        return True
+
     def evaluate(self):
-        if not (self.fresh() and self.in_session()):
+        if not (self.fresh() and self.in_session() and self.quotes_sane()):
             return
         entry, exit_ = self.premiums()
         strat = self.cfg["strategy"]
         now = time.time()
+
+        # 데이터 이상 감지: 프리미엄이 비상식적으로 크면 신호가 아니라 오류
+        if abs(entry) > strat.get("premium_sanity", 0.05):
+            if now - self.last_alert_ts >= strat.get("alert_cooldown_sec", 600):
+                self.last_alert_ts = now
+                log.warning("프리미엄 sanity 초과 %+.2f%% — 데이터 이상 의심, 스킵", entry * 100)
+                self.tg.send(f"⚠️ 프리미엄 {entry*100:+.1f}% — 비정상 호가로 판단, 신호 무시\n"
+                             f"선물 {self.fut_bid:,.0f}/{self.fut_ask:,.0f} perp {self.perp_bid:.2f}/{self.perp_ask:.2f} fx {self.fx:,.1f}")
+            return
 
         # 주기적 상태 로그
         if now - self.last_status_ts >= self.cfg.get("status_log_sec", 60):
