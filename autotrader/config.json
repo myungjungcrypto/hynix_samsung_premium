@@ -1,0 +1,30 @@
+{
+  "mode": "monitor",
+  "pair": {
+    "name": "SK하이닉스",
+    "futures_code": "A50607",
+    "futures_expiry": "2026-07-09",
+    "next_futures_code": "A50608",
+    "spread_code": "D5060701",
+    "perp_coin": "xyz:SKHX",
+    "contract_multiplier": 10
+  },
+  "strategy": {
+    "entry_threshold": 0.01,
+    "exit_threshold": 0.0,
+    "max_contracts": 1,
+    "alert_cooldown_sec": 600
+  },
+  "session": {
+    "start": "08:45",
+    "end": "15:45",
+    "roll_days_before_expiry": 2
+  },
+  "hyperliquid": {
+    "leverage": 3,
+    "isolated": true
+  },
+  "fx_poll_sec": 30,
+  "status_log_sec": 60,
+  "kis_secrets_path": "~/rwa_arbitrage/config/secrets.yaml"
+}
