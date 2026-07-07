@@ -32,6 +32,7 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autotrader.kis import KISClient, KISQuoteStream, load_keys
 from autotrader.hl import HLQuoteStream, HLTrader
+from autotrader.broker import make_broker
 
 KST = ZoneInfo("Asia/Seoul")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,9 +74,9 @@ class Telegram:
 class Executor:
     """live 모드 듀얼레그 주문 실행. 진입: 선물 먼저(체결확인) → perp 매칭."""
 
-    def __init__(self, cfg, kis: KISClient, hl: HLTrader, tg):
+    def __init__(self, cfg, broker, hl: HLTrader, tg):
         self.cfg = cfg
-        self.kis = kis
+        self.broker = broker
         self.hl = hl
         self.tg = tg
         self.pair = cfg["pair"]
@@ -86,7 +87,7 @@ class Executor:
         deadline = time.time() + timeout
         filled = 0
         while time.time() < deadline:
-            q = self.kis.filled_qty(odno)
+            q = self.broker.filled_qty(odno)
             if q is not None:
                 filled = max(filled, q)
                 if filled >= want:
@@ -100,24 +101,24 @@ class Executor:
         n = self.cfg["strategy"]["max_contracts"]
         self.tg.send(f"⚙️ [진입 실행] 선물 {code} {n}계약 시장가 매수 (프리미엄 {prem*100:+.2f}%)")
 
-        ok, odno = self.kis.order(code, "buy", n, price=0)
+        ok, odno = self.broker.order(code, "buy", n, price=0)
         if not ok:
             self.tg.send(f"❌ 선물 주문 실패: {odno}\n→ 진입 중단 (flat 유지)")
             return
 
         filled = self._wait_fill(odno, n)
         if filled == 0:
-            ok_c, msg = self.kis.cancel(odno, code, n)
+            ok_c, msg = self.broker.cancel(odno, code, n)
             self.tg.send(f"❌ 선물 미체결(15s) → 취소 {'성공' if ok_c else '실패:'+msg}\n→ 진입 중단")
             return
         if filled < n:
-            self.kis.cancel(odno, code, n - filled)
+            self.broker.cancel(odno, code, n - filled)
 
         size = filled * self.mult
         self.hl.ensure_leverage(coin)
         ok2, res = self.hl.market_order(coin, is_buy=False, size=size)
         if not ok2:
-            ok3, od2 = self.kis.order(code, "sell", filled, price=0)
+            ok3, od2 = self.broker.order(code, "sell", filled, price=0)
             self.tg.send(f"🚨 perp 숏 실패({res})\n→ 선물 언와인드 {'주문완료' if ok3 else '❌실패 — 수동 개입 필요!'}")
             return
 
@@ -139,13 +140,13 @@ class Executor:
             return
         self.tg.send(f"⚙️ [청산 실행] 선물 {n}계약 매도 + perp 커버 (프리미엄 {prem*100:+.2f}%)")
 
-        ok, odno = self.kis.order(code, "sell", n, price=0)
+        ok, odno = self.broker.order(code, "sell", n, price=0)
         if not ok:
             self.tg.send(f"❌ 선물 매도 실패: {odno}\n→ 청산 중단, 다음 신호에 재시도")
             return
         filled = self._wait_fill(odno, n)
         if filled == 0:
-            self.kis.cancel(odno, code, n)
+            self.broker.cancel(odno, code, n)
             self.tg.send("❌ 선물 매도 미체결 → 취소, 다음 신호에 재시도")
             return
 
@@ -377,11 +378,12 @@ async def watchdog(engine, kis, tg):
             warned = False
 
 
-def live_preflight(cfg, kis, tg):
+def live_preflight(cfg, broker, tg):
     """live 모드 사전점검. 실패 시 monitor로 강등."""
     errors = []
-    if not kis.account or "-" not in kis.account:
-        errors.append("KIS_ACCOUNT 미설정 (예: 12345678-01)")
+    ok_b, msg_b = broker.health()
+    if not ok_b:
+        errors.append(f"브로커 점검 실패: {msg_b}")
     wallet = os.environ.get("HL_WALLET_ADDRESS", "")
     pkey = os.environ.get("HL_PRIVATE_KEY", "")
     if not wallet or not pkey:
@@ -419,10 +421,11 @@ async def main():
     kis = KISClient(key, sec, acct)
     kis.token()
 
+    broker = make_broker(cfg, kis)
     if cfg["mode"] == "live":
-        hl_trader = live_preflight(cfg, kis, tg)
+        hl_trader = live_preflight(cfg, broker, tg)
         if hl_trader:
-            engine.executor = Executor(cfg, kis, hl_trader, tg)
+            engine.executor = Executor(cfg, broker, hl_trader, tg)
 
     try:
         b, a, bq, aq = kis.asking_price(cfg["pair"]["futures_code"])

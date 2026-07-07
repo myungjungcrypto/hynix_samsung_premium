@@ -29,6 +29,11 @@
   "live": {
     "max_cycles_per_day": 3
   },
+  "broker": {
+    "type": "kis",
+    "_comment": "키움 전환 시: type을 kiwoom_gw로, 데몬 주소는 gateway_url (기본 http://127.0.0.1:8899)",
+    "gateway_url": "http://127.0.0.1:8899"
+  },
   "fx_poll_sec": 30,
   "status_log_sec": 60,
   "kis_secrets_path": "~/rwa_arbitrage/config/secrets.yaml"
