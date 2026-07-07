@@ -120,7 +120,16 @@ def fetch_spot(session, code):
     r.raise_for_status()
     d = r.json()["datas"][0]
 
-    if d.get("marketStatus") == "OPEN":
+    # 동시호가/갭 데드존 — 연속 체결이 없는 시간대.
+    # 네이버는 이 구간에도 marketStatus=OPEN + 예상체결가를 반환하므로 시간으로 차단.
+    #   08:50~09:00 KRX 개장 동시호가 (NXT 프리는 08:50 종료)
+    #   15:20~15:40 KRX 종가 동시호가 + NXT 애프터 개장(15:40) 전
+    now_t = datetime.now(KST).time()
+    in_dead_zone = (dtime(8, 50) <= now_t < dtime(9, 0)) or (dtime(15, 20) <= now_t < dtime(15, 40))
+    if in_dead_zone:
+        return float(d["closePrice"].replace(",", "")), False, "동시호가/갭"
+
+    if d.get("marketStatus") == "OPEN" and dtime(9, 0) <= now_t < dtime(15, 20):
         return float(d["closePrice"].replace(",", "")), True, "정규장"
 
     over = d.get("overMarketPriceInfo") or {}
