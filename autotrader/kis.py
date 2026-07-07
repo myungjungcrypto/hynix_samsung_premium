@@ -129,6 +129,62 @@ class KISClient:
             return True, d.get("output", {}).get("ODNO", "")
         return False, d.get("msg1", str(d))
 
+    def filled_qty(self, odno, paper=False):
+        """주문번호의 총 체결수량 조회 (inquire-ccnl). 실패 시 None."""
+        if not self.account or "-" not in self.account:
+            return None
+        cano, prdt = self.account.split("-")
+        today = time.strftime("%Y%m%d")
+        params = {
+            "CANO": cano, "ACNT_PRDT_CD": prdt,
+            "STRT_ORD_DT": today, "END_ORD_DT": today,
+            "SLL_BUY_DVSN_CD": "00", "CCLD_NCCS_DVSN": "00",
+            "SORT_SQN": "DS", "STRT_ODNO": "",
+            "PDNO": "", "MKET_ID_CD": "",
+            "CTX_AREA_FK200": "", "CTX_AREA_NK200": "",
+        }
+        try:
+            r = requests.get(f"{BASE}/uapi/domestic-futureoption/v1/trading/inquire-ccnl",
+                             headers=self._headers("VTTO5201R" if paper else "TTTO5201R"),
+                             params=params, timeout=10)
+            d = r.json()
+            if d.get("rt_cd") != "0":
+                log.warning("체결조회 실패: %s", d.get("msg1"))
+                return None
+            for row in d.get("output1", []):
+                if str(row.get("odno", row.get("ODNO", ""))).lstrip("0") == str(odno).lstrip("0"):
+                    for k in ("tot_ccld_qty", "ccld_qty", "TOT_CCLD_QTY"):
+                        if k in row:
+                            return int(float(row[k]))
+                    log.warning("체결수량 필드 미확인, row=%s", row)
+                    return None
+            return 0  # 주문번호 미발견 = 아직 반영 전
+        except Exception as e:
+            log.warning("체결조회 오류: %s", e)
+            return None
+
+    def cancel(self, odno, code, qty, paper=False):
+        """미체결 주문 취소 (order-rvsecncl)."""
+        if not self.account or "-" not in self.account:
+            return False, "계좌 미설정"
+        cano, prdt = self.account.split("-")
+        body = {
+            "ORD_PRCS_DVSN_CD": "02", "CANO": cano, "ACNT_PRDT_CD": prdt,
+            "RVSE_CNCL_DVSN_CD": "02",  # 02=취소
+            "ORGN_ODNO": str(odno), "ORD_QTY": str(qty),
+            "UNIT_PRICE": "0", "NMPR_TYPE_CD": "02",
+            "KRX_NMPR_CNDT_CD": "0", "RMN_QTY_YN": "Y",
+            "FUOP_ITEM_DVSN_CD": "", "ORD_DVSN_CD": "02",
+        }
+        tr_id = "VTTO1103U" if paper else "TTTO1103U"
+        try:
+            r = requests.post(f"{BASE}/uapi/domestic-futureoption/v1/trading/order-rvsecncl",
+                              headers=self._headers(tr_id), json=body, timeout=10)
+            d = r.json()
+            return d.get("rt_cd") == "0", d.get("msg1", "")
+        except Exception as e:
+            return False, str(e)
+
 
 class KISQuoteStream:
     """H0ZFASP0 실시간 호가 구독. on_quote(code, bid, ask) 콜백."""

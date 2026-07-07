@@ -241,6 +241,8 @@ def compute_premiums(pair, books, spot, fx):
     return {
         "spot": spot,
         "fx": fx,
+        "perp_bid_usd": b["bid"],
+        "perp_ask_usd": b["ask"],
         "perp_mid_krw": b["mid"] * fx,
         # 진입(숏)은 bid에 체결되므로 bid 기준, 청산(매수)은 ask 기준으로 보수적으로 계산
         "entry_prem": b["bid"] * fx / spot - 1,
@@ -305,7 +307,7 @@ def check_pair(tg, cfg, state, pair, p, now_ts):
             tg.send(
                 f"🚨 <b>[진입] {pair['name']}</b> [{p.get('session', '')}]\n"
                 f"프리미엄 {p['entry_prem']*100:+.2f}% (기준 {entry_th*100:.2f}%)\n"
-                f"perp(bid) 환산 {p['entry_prem']*p['spot']+p['spot']:,.0f}원 / 현물 {p['spot']:,.0f}원\n"
+                f"perp(bid) ${p['perp_bid_usd']:,.2f} → 환산 {p['perp_bid_usd']*p['fx']:,.0f}원 / 현물 {p['spot']:,.0f}원\n"
                 f"환율 {p['fx']:,.1f}\n"
                 f"→ trade.xyz 숏 + 현물 매수\n"
                 f"(자동으로 진입상태 전환 — 실제로 안 들어갔으면 flat {key})"
@@ -319,6 +321,7 @@ def check_pair(tg, cfg, state, pair, p, now_ts):
             tg.send(
                 f"✅ <b>[청산] {pair['name']}</b> [{p.get('session', '')}]\n"
                 f"프리미엄 {p['exit_prem']*100:+.2f}% (기준 {exit_th*100:.2f}% 이하)\n"
+                f"perp(ask) ${p['perp_ask_usd']:,.2f} → 환산 {p['perp_ask_usd']*p['fx']:,.0f}원 / 현물 {p['spot']:,.0f}원\n"
                 f"→ 숏 청산 + 현물 매도\n"
                 f"(자동으로 청산상태 전환 — 아직 보유 중이면 open {key})"
             )

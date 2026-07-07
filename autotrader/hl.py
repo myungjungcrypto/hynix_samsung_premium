@@ -84,12 +84,37 @@ class HLTrader:
         self.exchange.update_leverage(self.leverage, coin, is_cross=False)
         return True
 
+    def position(self, coin):
+        """해당 코인 포지션 수량 (숏이면 음수, 없으면 0). SDK 미설치 시 None."""
+        if not self.exchange:
+            return None
+        state = self.info.user_state(self.wallet)
+        for ap in state.get("assetPositions", []):
+            pos = ap.get("position", {})
+            if pos.get("coin") == coin:
+                return float(pos.get("szi", 0))
+        return 0.0
+
     def market_order(self, coin, is_buy, size, slippage=0.005):
         """IOC 시장가성 주문. 반환 (성공, 체결수량 or 에러)."""
         if not self.exchange:
             return False, "SDK 미설치"
         try:
             res = self.exchange.market_open(coin, is_buy, size, None, slippage)
+            statuses = res.get("response", {}).get("data", {}).get("statuses", [])
+            filled = sum(float(s["filled"]["totalSz"]) for s in statuses if "filled" in s)
+            if filled > 0:
+                return True, filled
+            return False, str(statuses)
+        except Exception as e:
+            return False, str(e)
+
+    def market_close(self, coin, size=None, slippage=0.005):
+        """포지션 청산 (reduce). size=None이면 전량. 반환 (성공, 체결수량 or 에러)."""
+        if not self.exchange:
+            return False, "SDK 미설치"
+        try:
+            res = self.exchange.market_close(coin, size, None, slippage)
             statuses = res.get("response", {}).get("data", {}).get("statuses", [])
             filled = sum(float(s["filled"]["totalSz"]) for s in statuses if "filled" in s)
             if filled > 0:
