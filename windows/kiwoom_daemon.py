@@ -35,6 +35,20 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("kiwoom")
 
+
+def _load_dotenv():
+    """레포 루트의 .env 로드 (시스템 환경변수가 우선)."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 TOKEN = os.environ.get("KIWOOM_GW_TOKEN", "")
 PORT = int(os.environ.get("KIWOOM_GW_PORT", "8899"))
 SCREEN = "9000"
