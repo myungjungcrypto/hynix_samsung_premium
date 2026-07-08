@@ -149,6 +149,30 @@ class KiwoomDaemon:
             return {"ok": False, "error": f"주문번호 미수신 {self.last_msg}"}
         return {"ok": True, "order_no": self.last_order_no}
 
+    def _sfuture_codes(self, base_code):
+        """기초자산(예: 000660)의 주식선물 종목코드 목록 — 키움 코드 형식 확인용."""
+        out = {}
+        # 주식선물 리스트 (월물별 코드)
+        try:
+            r = self.ocx.dynamicCall("GetSFutureList(QString)", base_code)
+            out["GetSFutureList"] = r
+        except Exception as e:
+            out["GetSFutureList_err"] = str(e)
+        try:
+            r = self.ocx.dynamicCall("KOA_Functions(QString, QString)",
+                                     "GetSFutureList", base_code)
+            out["KOA_GetSFutureList"] = r
+        except Exception as e:
+            out["KOA_err"] = str(e)
+        # 종목명 확인용 (코드가 맞으면 이름이 나옴)
+        return out
+
+    def _master_name(self, code):
+        try:
+            return self.ocx.dynamicCall("GetMasterCodeName(QString)", code)
+        except Exception as e:
+            return f"err: {e}"
+
     def _cancel(self, order_no, code, qty):
         ret = self.ocx.dynamicCall(
             "SendOrderFO(QString,QString,QString,QString,int,QString,QString,int,QString,QString)",
@@ -195,6 +219,24 @@ def fill(order_no):
         return jsonify(ok=True, filled=daemon.fills[order_no])
     # 데몬 재시작 등으로 추적 이력 없음 → 실패로 응답 (봇이 타임아웃 처리)
     return jsonify(ok=False, error="unknown order_no")
+
+
+@flask_app.route("/codes/<base_code>")
+def codes(base_code):
+    """기초자산 코드(000660 등)로 키움 주식선물 종목코드 조회."""
+    if not _auth():
+        return jsonify(ok=False, error="unauthorized"), 401
+    r = daemon.call(daemon._sfuture_codes, base_code)
+    return jsonify(ok=True, result=r.get("value", r))
+
+
+@flask_app.route("/name/<code>")
+def name(code):
+    """종목코드 → 종목명 (코드 형식 검증용)."""
+    if not _auth():
+        return jsonify(ok=False, error="unauthorized"), 401
+    r = daemon.call(daemon._master_name, code)
+    return jsonify(ok=True, name=r.get("value", r))
 
 
 @flask_app.route("/cancel", methods=["POST"])
