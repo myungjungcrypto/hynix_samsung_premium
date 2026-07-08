@@ -1,21 +1,35 @@
 {
   "mode": "monitor",
-  "pair": {
-    "name": "SK하이닉스",
-    "futures_code": "A50608",
-    "order_code": "A5068000",
-    "futures_expiry": "2026-08-13",
-    "next_futures_code": "A50609",
-    "next_order_code": "A5069000",
-    "spread_code": "D5060801",
-    "_codes": "futures_code=KIS 시세용, order_code=거래소 표준(키움 주문용)",
-    "perp_coin": "xyz:SKHX",
-    "contract_multiplier": 10
-  },
+  "pairs": [
+    {
+      "key": "SKHX",
+      "name": "SK하이닉스",
+      "futures_code": "A50608",
+      "order_code": "A5068000",
+      "futures_expiry": "2026-08-13",
+      "next_futures_code": "A50609",
+      "next_order_code": "A5069000",
+      "perp_coin": "xyz:SKHX",
+      "contract_multiplier": 10,
+      "max_contracts": 1
+    },
+    {
+      "key": "SMSN",
+      "name": "삼성전자",
+      "futures_code": "A11608",
+      "order_code": "A1168000",
+      "futures_expiry": "2026-08-13",
+      "next_futures_code": "A11609",
+      "next_order_code": "A1169000",
+      "perp_coin": "xyz:SMSN",
+      "contract_multiplier": 10,
+      "max_contracts": 1
+    }
+  ],
+  "_codes": "futures_code=KIS 시세용, order_code=거래소 표준(키움 주문용)",
   "strategy": {
     "entry_threshold": 0.01,
     "exit_threshold": 0.0,
-    "max_contracts": 1,
     "alert_cooldown_sec": 600,
     "max_fut_spread": 0.003,
     "premium_sanity": 0.05
@@ -33,8 +47,7 @@
     "max_cycles_per_day": 3
   },
   "broker": {
-    "type": "kis",
-    "_comment": "키움 전환 시: type을 kiwoom_gw로, 데몬 주소는 gateway_url (기본 http://127.0.0.1:8899)",
+    "type": "kiwoom_gw",
     "gateway_url": "http://127.0.0.1:8899"
   },
   "fx_poll_sec": 30,
