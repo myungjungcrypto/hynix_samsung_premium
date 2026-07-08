@@ -95,30 +95,83 @@ class HLTrader:
                 return float(pos.get("szi", 0))
         return 0.0
 
+    @staticmethod
+    def _parse_fill(res):
+        """주문 응답에서 (체결수량, 평균단가, oid) 추출."""
+        statuses = res.get("response", {}).get("data", {}).get("statuses", [])
+        total_sz = 0.0
+        total_val = 0.0
+        oid = None
+        for s in statuses:
+            f = s.get("filled")
+            if f:
+                sz = float(f["totalSz"])
+                total_sz += sz
+                total_val += sz * float(f.get("avgPx", 0))
+                oid = f.get("oid", oid)
+        avg = total_val / total_sz if total_sz > 0 else 0.0
+        return total_sz, avg, oid
+
     def market_order(self, coin, is_buy, size, slippage=0.005):
-        """IOC 시장가성 주문. 반환 (성공, 체결수량 or 에러)."""
+        """IOC 시장가성 주문. 반환 (성공, {size, avg_px, oid} or 에러문자열)."""
         if not self.exchange:
             return False, "SDK 미설치"
         try:
             res = self.exchange.market_open(coin, is_buy, size, None, slippage)
-            statuses = res.get("response", {}).get("data", {}).get("statuses", [])
-            filled = sum(float(s["filled"]["totalSz"]) for s in statuses if "filled" in s)
-            if filled > 0:
-                return True, filled
-            return False, str(statuses)
+            sz, avg, oid = self._parse_fill(res)
+            if sz > 0:
+                return True, {"size": sz, "avg_px": avg, "oid": oid}
+            return False, str(res.get("response", {}).get("data", {}).get("statuses", res))
         except Exception as e:
             return False, str(e)
 
     def market_close(self, coin, size=None, slippage=0.005):
-        """포지션 청산 (reduce). size=None이면 전량. 반환 (성공, 체결수량 or 에러)."""
+        """포지션 청산 (reduce). 반환 (성공, {size, avg_px, oid} or 에러문자열)."""
         if not self.exchange:
             return False, "SDK 미설치"
         try:
             res = self.exchange.market_close(coin, size, None, slippage)
-            statuses = res.get("response", {}).get("data", {}).get("statuses", [])
-            filled = sum(float(s["filled"]["totalSz"]) for s in statuses if "filled" in s)
-            if filled > 0:
-                return True, filled
-            return False, str(statuses)
+            sz, avg, oid = self._parse_fill(res)
+            if sz > 0:
+                return True, {"size": sz, "avg_px": avg, "oid": oid}
+            return False, str(res.get("response", {}).get("data", {}).get("statuses", res))
         except Exception as e:
             return False, str(e)
+
+    def fills_for_oids(self, oids):
+        """주문 ID들의 실측 수수료·실현손익 합산. 반환 {fee, closed_pnl} (USDC), 실패 시 None."""
+        if not self.exchange:
+            return None
+        try:
+            oids = {int(o) for o in oids if o is not None}
+            fills = self.info.user_fills(self.wallet)
+            fee = 0.0
+            closed = 0.0
+            matched = 0
+            for f in fills:
+                if int(f.get("oid", -1)) in oids:
+                    fee += float(f.get("fee", 0))
+                    closed += float(f.get("closedPnl", 0))
+                    matched += 1
+            if matched == 0:
+                return None
+            return {"fee": fee, "closed_pnl": closed}
+        except Exception as e:
+            log.warning("user_fills 조회 실패: %s", e)
+            return None
+
+    def funding_between(self, coin, start_ms, end_ms):
+        """보유 기간 동안 해당 코인의 펀딩 수취 합계 (USDC, +면 수취). 실패 시 None."""
+        if not self.exchange:
+            return None
+        try:
+            recs = self.info.user_funding_history(self.wallet, int(start_ms), int(end_ms))
+            total = 0.0
+            for r in recs:
+                d = r.get("delta", {})
+                if d.get("coin") == coin:
+                    total += float(d.get("usdc", 0))
+            return total
+        except Exception as e:
+            log.warning("user_funding 조회 실패: %s", e)
+            return None

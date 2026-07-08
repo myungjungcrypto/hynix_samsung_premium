@@ -63,7 +63,7 @@ class KiwoomDaemon:
         self.ocx.OnReceiveMsg.connect(self._on_msg)
         self.connected = False
         self.account = ""
-        self.fills = {}        # order_no -> 누적 체결수량
+        self.fills = {}        # order_no -> {"qty": 누적수량, "value": 누적금액, "avg_px": 평균단가}
         self.last_order_no = None
         self.last_msg = ""
         self.jobs = queue.Queue()
@@ -92,14 +92,25 @@ class KiwoomDaemon:
         order_no = get(9203)
         filled = get(911)      # 체결누계수량
         status = get(913)      # 주문상태 (접수/체결/확인)
+        px = get(910)          # 체결가 (이번 체결 단가)
         if order_no:
             self.last_order_no = order_no
             if filled:
                 try:
-                    self.fills[order_no] = int(filled)
+                    new_cum = int(filled)
+                    rec = self.fills.setdefault(order_no, {"qty": 0, "value": 0.0, "avg_px": 0.0})
+                    delta = new_cum - rec["qty"]
+                    if delta > 0 and px:
+                        # 수량가중 평균단가 (부호/콤마 방어)
+                        unit_px = abs(float(px.replace(",", "").replace("+", "").replace("-", "")))
+                        rec["value"] += unit_px * delta
+                        rec["qty"] = new_cum
+                        rec["avg_px"] = rec["value"] / rec["qty"]
+                    elif new_cum > rec["qty"]:
+                        rec["qty"] = new_cum
                 except ValueError:
                     pass
-        log.info("체잔: 주문=%s 상태=%s 체결누계=%s", order_no, status, filled)
+        log.info("체잔: 주문=%s 상태=%s 체결누계=%s 체결가=%s", order_no, status, filled, px)
 
     def _on_msg(self, scr, rq, tr, msg):
         self.last_msg = msg
@@ -216,7 +227,8 @@ def fill(order_no):
     if not _auth():
         return jsonify(ok=False, error="unauthorized"), 401
     if order_no in daemon.fills:
-        return jsonify(ok=True, filled=daemon.fills[order_no])
+        rec = daemon.fills[order_no]
+        return jsonify(ok=True, filled=rec["qty"], avg_price=rec["avg_px"])
     # 데몬 재시작 등으로 추적 이력 없음 → 실패로 응답 (봇이 타임아웃 처리)
     return jsonify(ok=False, error="unknown order_no")
 

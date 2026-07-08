@@ -61,24 +61,39 @@ def load_trades():
     return out
 
 
+def trade_pnl(t):
+    """기록에서 손익 추출 — 실측(real) 우선, 없으면 추정(est)."""
+    if "real_pnl_krw" in t:
+        return t["real_pnl_krw"]
+    return t.get("est_pnl_krw", 0)
+
+
 def pnl_report(engine):
     trades = load_trades()
     if not trades:
         lines = ["📊 아직 청산 완료된 사이클이 없습니다."]
     else:
-        total = sum(t.get("est_pnl_krw", 0) for t in trades)
-        wins = sum(1 for t in trades if t.get("est_pnl_krw", 0) > 0)
+        total = sum(trade_pnl(t) for t in trades)
+        wins = sum(1 for t in trades if trade_pnl(t) > 0)
+        n_est = sum(1 for t in trades if "real_pnl_krw" not in t or t.get("settle") != "full")
+        fut_sum = sum(t.get("fut_pnl_krw", 0) - t.get("kiwoom_fee_krw", 0) for t in trades)
+        hl_sum = sum(t.get("hl_closed_pnl_usd", 0) - t.get("hl_fee_usd", 0) for t in trades)
+        funding_sum = sum(t.get("funding_usd", 0) for t in trades)
         lines = [
-            "📊 누적 성과",
+            "📊 누적 성과 (실현 기준)",
             f"청산 사이클: {len(trades)}회 (승 {wins} / 패 {len(trades)-wins}, 승률 {wins/len(trades)*100:.0f}%)",
-            f"추정 누적 순익: {total:+,.0f}원 (프리미엄 캡처 기준, 수수료 미반영)",
+            f"실현 순익 합계: {total:+,.0f}원"
+            + (f" (이 중 {n_est}건 일부추정)" if n_est else ""),
+            f"- 선물 레그: {fut_sum:+,.0f}원 (수수료 차감)",
+            f"- perp 레그: {hl_sum:+,.2f}$ (수수료 차감)",
+            f"- 펀딩 수취: {funding_sum:+,.2f}$",
         ]
         by_key = {}
         for t in trades:
             k = t.get("key", "?")
             by_key.setdefault(k, [0, 0.0])
             by_key[k][0] += 1
-            by_key[k][1] += t.get("est_pnl_krw", 0)
+            by_key[k][1] += trade_pnl(t)
         for k, (n, s) in by_key.items():
             lines.append(f"- {k}: {n}회, {s:+,.0f}원")
     for p in engine.pairs:
@@ -171,16 +186,18 @@ class Executor:
         self.tg = tg
 
     def _wait_fill(self, odno, want, timeout=15):
+        """(체결수량, 평균단가|None) — timeout 내 폴링."""
         deadline = time.time() + timeout
-        filled = 0
+        filled, avg_px = 0, None
         while time.time() < deadline:
-            q = self.broker.filled_qty(odno)
+            q, px = self.broker.fill_info(odno)
             if q is not None:
                 filled = max(filled, q)
+                avg_px = px or avg_px
                 if filled >= want:
                     break
             time.sleep(1)
-        return filled
+        return filled, avg_px
 
     def enter(self, engine, ctx: PairCtx, prem):
         code = ctx.cfg.get("order_code", ctx.cfg["futures_code"])
@@ -194,7 +211,7 @@ class Executor:
             self.tg.send(f"❌ {ctx.name} 선물 주문 실패: {odno}\n→ 진입 중단 (flat 유지)")
             return
 
-        filled = self._wait_fill(odno, n)
+        filled, fut_px = self._wait_fill(odno, n)
         if filled == 0:
             ok_c, msg = self.broker.cancel(odno, code, n)
             self.tg.send(f"❌ {ctx.name} 선물 미체결(15s) → 취소 {'성공' if ok_c else '실패:'+msg}\n→ 진입 중단")
@@ -210,12 +227,15 @@ class Executor:
             self.tg.send(f"🚨 {ctx.name} perp 숏 실패({res})\n→ 선물 언와인드 {'주문완료' if ok3 else '❌실패 — 수동 개입 필요!'}")
             return
 
-        ctx.state = {"position": "open", "contracts": filled, "perp_size": float(res),
+        ctx.state = {"position": "open", "contracts": filled, "perp_size": float(res["size"]),
                      "entry_prem": prem, "entry_ts": time.time(),
-                     "entry_fut_price": ctx.fut_ask,
+                     "entry_fut_price": fut_px or ctx.fut_ask,
+                     "entry_fut_actual": bool(fut_px),
+                     "entry_hl_oid": res.get("oid"), "entry_hl_px": res.get("avg_px"),
                      "entry_date": datetime.now(KST).strftime("%Y-%m-%d")}
         engine.save_state()
-        self.tg.send(f"✅ [진입 완료] {ctx.name} 선물 {filled}계약 매수 + perp 숏 {res}주\n"
+        self.tg.send(f"✅ [진입 완료] {ctx.name} 선물 {filled}계약 @{(fut_px or ctx.fut_ask):,.0f}"
+                     f" + perp 숏 {res['size']}주 @${res.get('avg_px', 0):,.2f}\n"
                      f"진입 프리미엄 {prem*100:+.2f}%")
 
     def exit(self, engine, ctx: PairCtx, prem):
@@ -234,7 +254,7 @@ class Executor:
         if not ok:
             self.tg.send(f"❌ {ctx.name} 선물 매도 실패: {odno}\n→ 청산 중단, 다음 신호에 재시도")
             return
-        filled = self._wait_fill(odno, n)
+        filled, exit_fut_px = self._wait_fill(odno, n)
         if filled == 0:
             self.broker.cancel(odno, code, n)
             self.tg.send(f"❌ {ctx.name} 선물 매도 미체결 → 취소, 다음 신호에 재시도")
@@ -244,27 +264,70 @@ class Executor:
         ok2, res = self.hl.market_close(coin, cover)
         if not ok2:
             self.tg.send(f"🚨 {ctx.name} perp 커버 실패({res}) — perp 숏 {cover}주 잔존, 수동 확인 필요!")
+            res = {}
 
-        # 거래 기록: 캡처 스프레드 × 노셔널 = 추정 손익 (수수료 미반영)
-        entry_prem = ctx.state.get("entry_prem", 0)
-        entry_fut = ctx.state.get("entry_fut_price", ctx.fut_bid)
-        captured = entry_prem - prem
-        est_pnl = captured * entry_fut * mult * filled
-        record_trade({"key": ctx.key, "contracts": filled,
-                      "entry_prem": round(entry_prem, 5), "exit_prem": round(prem, 5),
-                      "captured_pct": round(captured * 100, 3),
-                      "est_pnl_krw": round(est_pnl),
-                      "entry_date": ctx.state.get("entry_date", "")})
+        rec, msg = self._settle(engine, ctx, prem, filled, exit_fut_px, res, mult)
+        record_trade(rec)
 
         if filled >= n:
             ctx.state = {"position": "flat"}
             engine.save_state()
-            self.tg.send(f"✅ [청산 완료] {ctx.name} 캡처 {captured*100:+.2f}%p ≈ {est_pnl:+,.0f}원")
+            self.tg.send(f"✅ [청산 완료] {ctx.name}\n{msg}")
         else:
             ctx.state["contracts"] = n - filled
             ctx.state["perp_size"] = perp_size - cover
             engine.save_state()
-            self.tg.send(f"⚠️ {ctx.name} 부분 청산 {filled}/{n} (기록됨) — 잔여 {n-filled}계약 유지")
+            self.tg.send(f"⚠️ {ctx.name} 부분 청산 {filled}/{n}\n{msg}\n잔여 {n-filled}계약 유지")
+
+    def _settle(self, engine, ctx, prem, filled, exit_fut_px, hl_res, mult):
+        """실측 정산: 선물 레그(체결가·수수료) + HL 레그(실현손익·수수료·펀딩)."""
+        st = ctx.state
+        entry_prem = st.get("entry_prem", 0)
+        captured = entry_prem - prem
+        fee_rate = self.cfg.get("fees", {}).get("kiwoom_fee_rate", 0.00003)
+
+        entry_px = st.get("entry_fut_price", ctx.fut_bid)
+        exit_px = exit_fut_px or ctx.fut_bid
+        actual_px = st.get("entry_fut_actual", False) and bool(exit_fut_px)
+        fut_pnl = (exit_px - entry_px) * mult * filled
+        kiwoom_fee = (entry_px + exit_px) * mult * filled * fee_rate
+
+        settle = "full"
+        hl_detail = self.hl.fills_for_oids([st.get("entry_hl_oid"), hl_res.get("oid")])
+        funding = self.hl.funding_between(ctx.cfg["perp_coin"],
+                                          st.get("entry_ts", time.time()) * 1000,
+                                          time.time() * 1000)
+        if hl_detail is None:
+            # 폴백: 체결 평균가 기반 (수수료 미반영)
+            e_px, x_px = st.get("entry_hl_px") or 0, hl_res.get("avg_px") or 0
+            hl_detail = {"closed_pnl": (e_px - x_px) * float(hl_res.get("size", 0)), "fee": 0.0}
+            settle = "partial"
+        if funding is None:
+            funding = 0.0
+            settle = "partial"
+        if not actual_px:
+            settle = "partial"
+
+        hl_net_usd = hl_detail["closed_pnl"] - hl_detail["fee"] + funding
+        fx = engine.fx or 0
+        real_pnl = fut_pnl - kiwoom_fee + hl_net_usd * fx
+
+        rec = {"key": ctx.key, "contracts": filled, "settle": settle,
+               "entry_prem": round(entry_prem, 5), "exit_prem": round(prem, 5),
+               "captured_pct": round(captured * 100, 3),
+               "fut_entry_px": entry_px, "fut_exit_px": exit_px,
+               "fut_pnl_krw": round(fut_pnl), "kiwoom_fee_krw": round(kiwoom_fee),
+               "hl_closed_pnl_usd": round(hl_detail["closed_pnl"], 2),
+               "hl_fee_usd": round(hl_detail["fee"], 4),
+               "funding_usd": round(funding, 4),
+               "fx": round(fx, 1),
+               "real_pnl_krw": round(real_pnl),
+               "entry_date": st.get("entry_date", "")}
+        msg = (f"실현손익 {real_pnl:+,.0f}원 ({'실측' if settle=='full' else '일부추정'})\n"
+               f"- 선물 {fut_pnl:+,.0f}원 (수수료 -{kiwoom_fee:,.0f}원)\n"
+               f"- perp {hl_detail['closed_pnl']:+,.2f}$ (수수료 -{hl_detail['fee']:.2f}$)\n"
+               f"- 펀딩 {funding:+,.2f}$ | 캡처 {captured*100:+.2f}%p")
+        return rec, msg
 
 
 class Engine:

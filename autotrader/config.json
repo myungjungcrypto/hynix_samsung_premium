@@ -46,6 +46,10 @@
   "live": {
     "max_cycles_per_day": 3
   },
+  "fees": {
+    "kiwoom_fee_rate": 0.00003,
+    "_comment": "키움 주식선물 편도 수수료율(약정금액 대비). 영웅문 앱에서 본인 약정 요율 확인 후 수정"
+  },
   "broker": {
     "type": "kiwoom_gw",
     "gateway_url": "http://127.0.0.1:8899"
