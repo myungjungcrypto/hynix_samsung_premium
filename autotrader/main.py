@@ -48,7 +48,7 @@ log = logging.getLogger("auto")
 def load_dotenv():
     path = os.path.join(os.path.dirname(BASE_DIR), ".env")
     if os.path.exists(path):
-        for line in open(path):
+        for line in open(path, encoding="utf-8"):
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
