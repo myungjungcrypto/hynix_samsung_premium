@@ -186,12 +186,12 @@ class Engine:
 
     def _load_state(self):
         try:
-            return json.load(open(STATE_PATH))
+            return json.load(open(STATE_PATH, encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return {"position": "flat"}
 
     def _save_state(self):
-        json.dump(self.state, open(STATE_PATH, "w"), ensure_ascii=False, indent=1)
+        json.dump(self.state, open(STATE_PATH, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     def on_fut(self, code, bid, ask):
         self.fut_bid, self.fut_ask, self.fut_ts = bid, ask, time.time()
@@ -395,7 +395,7 @@ def live_preflight(cfg, broker, tg):
             errors.append("hyperliquid-python-sdk 미설치 (pip install hyperliquid-python-sdk)")
     if not errors:
         pos = hl.position(cfg["pair"]["perp_coin"])
-        state = json.load(open(STATE_PATH)) if os.path.exists(STATE_PATH) else {"position": "flat"}
+        state = json.load(open(STATE_PATH, encoding="utf-8")) if os.path.exists(STATE_PATH) else {"position": "flat"}
         expected = -(state.get("perp_size", 0)) if state.get("position") == "open" else 0.0
         if pos is not None and abs(pos - expected) > 0.01:
             errors.append(f"포지션 불일치: HL 실포지션 {pos} vs state 기대값 {expected} — state.json 수동 정리 필요")
@@ -413,7 +413,7 @@ def live_preflight(cfg, broker, tg):
 
 async def main():
     load_dotenv()
-    cfg = json.load(open(os.path.join(BASE_DIR, "config.json")))
+    cfg = json.load(open(os.path.join(BASE_DIR, "config.json"), encoding="utf-8"))
     tg = Telegram()
     engine = Engine(cfg, tg)
 

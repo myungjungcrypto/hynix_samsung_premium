@@ -34,7 +34,7 @@ def load_keys(secrets_path):
         return key, sec, acct
     path = os.path.expanduser(secrets_path)
     if os.path.exists(path):
-        text = open(path).read()
+        text = open(path, encoding="utf-8").read()
         blk = text.split("kis:")[1] if "kis:" in text else text
         m_key = re.search(r'app_key:\s*["\']?([^"\'\n]+)', blk)
         m_sec = re.search(r'app_secret:\s*["\']?([^"\'\n]+)', blk)

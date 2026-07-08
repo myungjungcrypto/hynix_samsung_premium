@@ -71,7 +71,7 @@ def load_dotenv():
 
 def load_config():
     load_dotenv()
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     cfg["telegram_token"] = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_token", "")
     cfg["telegram_chat_id"] = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id", "")
@@ -83,7 +83,7 @@ def load_config():
 
 def load_state():
     try:
-        with open(STATE_PATH) as f:
+        with open(STATE_PATH, encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -91,7 +91,7 @@ def load_state():
 
 def save_state(state):
     tmp = STATE_PATH + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
     os.replace(tmp, STATE_PATH)
 
