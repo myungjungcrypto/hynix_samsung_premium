@@ -38,6 +38,70 @@ KST = ZoneInfo("Asia/Seoul")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
 PAUSE_PATH = os.path.join(BASE_DIR, "PAUSE")
+TRADES_PATH = os.path.join(BASE_DIR, "trades.jsonl")
+
+
+def record_trade(rec):
+    rec["ts"] = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    with open(TRADES_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def load_trades():
+    if not os.path.exists(TRADES_PATH):
+        return []
+    out = []
+    for line in open(TRADES_PATH, encoding="utf-8"):
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def pnl_report(engine):
+    trades = load_trades()
+    if not trades:
+        lines = ["📊 아직 청산 완료된 사이클이 없습니다."]
+    else:
+        total = sum(t.get("est_pnl_krw", 0) for t in trades)
+        wins = sum(1 for t in trades if t.get("est_pnl_krw", 0) > 0)
+        lines = [
+            "📊 누적 성과",
+            f"청산 사이클: {len(trades)}회 (승 {wins} / 패 {len(trades)-wins}, 승률 {wins/len(trades)*100:.0f}%)",
+            f"추정 누적 순익: {total:+,.0f}원 (프리미엄 캡처 기준, 수수료 미반영)",
+        ]
+        by_key = {}
+        for t in trades:
+            k = t.get("key", "?")
+            by_key.setdefault(k, [0, 0.0])
+            by_key[k][0] += 1
+            by_key[k][1] += t.get("est_pnl_krw", 0)
+        for k, (n, s) in by_key.items():
+            lines.append(f"- {k}: {n}회, {s:+,.0f}원")
+    for p in engine.pairs:
+        if p.state.get("position") == "open":
+            lines.append(f"보유 중: {p.name} {p.state.get('contracts')}계약 "
+                         f"(진입 {p.state.get('entry_prem', 0)*100:+.2f}%, {p.state.get('entry_date','')})")
+    return "\n".join(lines)
+
+
+def status_report(engine):
+    lines = [f"🤖 mode={engine.cfg['mode']}"
+             + (" ⏸️일시정지" if os.path.exists(PAUSE_PATH) else "")]
+    for p in engine.pairs:
+        if p.fut_bid > 0 and p.perp_bid > 0 and engine.fx > 0:
+            e, x = engine.premiums(p)
+            lines.append(f"{p.name} [{p.state['position']}]"
+                         + ("" if p.trade_enabled else " [비활성]")
+                         + f"\n  선물 {p.fut_bid:,.0f}/{p.fut_ask:,.0f} perp ${p.perp_bid:.2f}"
+                         f"\n  진입 {e*100:+.2f}% / 청산 {x*100:+.2f}% (오늘 {p.cycles['count']}사이클)")
+        else:
+            lines.append(f"{p.name} [{p.state['position']}] 시세 대기 중")
+    lines.append(f"환율 {engine.fx:,.1f} / 만기 D-{engine.pairs[0].days_to_expiry()}")
+    return "\n".join(lines)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -148,6 +212,7 @@ class Executor:
 
         ctx.state = {"position": "open", "contracts": filled, "perp_size": float(res),
                      "entry_prem": prem, "entry_ts": time.time(),
+                     "entry_fut_price": ctx.fut_ask,
                      "entry_date": datetime.now(KST).strftime("%Y-%m-%d")}
         engine.save_state()
         self.tg.send(f"✅ [진입 완료] {ctx.name} 선물 {filled}계약 매수 + perp 숏 {res}주\n"
@@ -180,16 +245,26 @@ class Executor:
         if not ok2:
             self.tg.send(f"🚨 {ctx.name} perp 커버 실패({res}) — perp 숏 {cover}주 잔존, 수동 확인 필요!")
 
+        # 거래 기록: 캡처 스프레드 × 노셔널 = 추정 손익 (수수료 미반영)
+        entry_prem = ctx.state.get("entry_prem", 0)
+        entry_fut = ctx.state.get("entry_fut_price", ctx.fut_bid)
+        captured = entry_prem - prem
+        est_pnl = captured * entry_fut * mult * filled
+        record_trade({"key": ctx.key, "contracts": filled,
+                      "entry_prem": round(entry_prem, 5), "exit_prem": round(prem, 5),
+                      "captured_pct": round(captured * 100, 3),
+                      "est_pnl_krw": round(est_pnl),
+                      "entry_date": ctx.state.get("entry_date", "")})
+
         if filled >= n:
-            entry_prem = ctx.state.get("entry_prem", 0)
             ctx.state = {"position": "flat"}
             engine.save_state()
-            self.tg.send(f"✅ [청산 완료] {ctx.name} 캡처 스프레드 {(entry_prem-prem)*100:+.2f}%p")
+            self.tg.send(f"✅ [청산 완료] {ctx.name} 캡처 {captured*100:+.2f}%p ≈ {est_pnl:+,.0f}원")
         else:
             ctx.state["contracts"] = n - filled
             ctx.state["perp_size"] = perp_size - cover
             engine.save_state()
-            self.tg.send(f"⚠️ {ctx.name} 부분 청산 {filled}/{n} — 잔여 {n-filled}계약 유지")
+            self.tg.send(f"⚠️ {ctx.name} 부분 청산 {filled}/{n} (기록됨) — 잔여 {n-filled}계약 유지")
 
 
 class Engine:
@@ -367,6 +442,57 @@ class Engine:
         asyncio.get_running_loop().create_task(run())
 
 
+async def tg_commands(engine, tg):
+    """텔레그램 명령 수신 (전용 봇 토큰 필요 — 알림봇과 getUpdates 충돌 방지).
+
+    .env에 TELEGRAM_BOT_TOKEN_AT=<새 봇 토큰> 설정 시 활성화.
+    명령: pnl(성과) / status(현황) / pause(일시정지) / resume(재개)
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN_AT", "")
+    if not token:
+        log.info("TELEGRAM_BOT_TOKEN_AT 미설정 — 텔레그램 명령 비활성 (알림은 기존대로 발송)")
+        return
+    chat_id = tg.chat_id
+    api = f"https://api.telegram.org/bot{token}"
+
+    def reply(text):
+        try:
+            requests.post(f"{api}/sendMessage",
+                          json={"chat_id": chat_id, "text": text}, timeout=10)
+        except Exception as e:
+            log.error("명령 응답 실패: %s", e)
+
+    offset = 0
+    log.info("텔레그램 명령 활성 (pnl / status / pause / resume)")
+    while True:
+        try:
+            r = await asyncio.to_thread(
+                requests.get, f"{api}/getUpdates",
+                params={"offset": offset + 1, "timeout": 25}, timeout=35)
+            for u in r.json().get("result", []):
+                offset = max(offset, u["update_id"])
+                msg = u.get("message") or {}
+                if str(msg.get("chat", {}).get("id")) != str(chat_id):
+                    continue
+                cmd = (msg.get("text") or "").strip().lower().lstrip("/")
+                if cmd in ("pnl", "수익", "성과"):
+                    reply(pnl_report(engine))
+                elif cmd in ("status", "상태"):
+                    reply(status_report(engine))
+                elif cmd == "pause":
+                    open(PAUSE_PATH, "w").close()
+                    reply("⏸️ 일시정지 — 신규 신호 무시 (재개: resume)")
+                elif cmd == "resume":
+                    if os.path.exists(PAUSE_PATH):
+                        os.remove(PAUSE_PATH)
+                    reply("▶️ 재개 — 신호 감시 중")
+                elif cmd:
+                    reply("명령: pnl(성과) / status(현황) / pause / resume")
+        except Exception as e:
+            log.warning("텔레그램 명령 폴링 오류: %s", e)
+            await asyncio.sleep(10)
+
+
 async def fx_loop(engine, interval):
     url = "https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?range=1d&interval=1m"
     naver = ("https://m.stock.naver.com/front-api/marketIndex/productDetail"
@@ -500,6 +626,7 @@ async def main():
         hl_stream.run(),
         fx_loop(engine, cfg.get("fx_poll_sec", 30)),
         watchdog(engine, kis, tg),
+        tg_commands(engine, tg),
     )
 
 
