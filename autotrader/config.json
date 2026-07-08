@@ -3,9 +3,12 @@
   "pair": {
     "name": "SK하이닉스",
     "futures_code": "A50608",
+    "order_code": "A5068000",
     "futures_expiry": "2026-08-13",
     "next_futures_code": "A50609",
+    "next_order_code": "A5069000",
     "spread_code": "D5060801",
+    "_codes": "futures_code=KIS 시세용, order_code=거래소 표준(키움 주문용)",
     "perp_coin": "xyz:SKHX",
     "contract_multiplier": 10
   },

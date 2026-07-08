@@ -96,7 +96,7 @@ class Executor:
         return filled
 
     def enter(self, engine, prem):
-        code = self.pair["futures_code"]
+        code = self.pair.get("order_code", self.pair["futures_code"])
         coin = self.pair["perp_coin"]
         n = self.cfg["strategy"]["max_contracts"]
         self.tg.send(f"⚙️ [진입 실행] 선물 {code} {n}계약 시장가 매수 (프리미엄 {prem*100:+.2f}%)")
@@ -130,7 +130,7 @@ class Executor:
                      f"진입 프리미엄 {prem*100:+.2f}%")
 
     def exit(self, engine, prem):
-        code = self.pair["futures_code"]
+        code = self.pair.get("order_code", self.pair["futures_code"])
         coin = self.pair["perp_coin"]
         n = int(engine.state.get("contracts", 0))
         perp_size = float(engine.state.get("perp_size", n * self.mult))
