@@ -61,14 +61,19 @@ class Telegram:
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     def send(self, text):
-        if not self.token:
-            log.info("[TG생략] %s", text.replace("\n", " / "))
+        head = text.replace("\n", " / ")[:120]
+        if not self.token or not self.chat_id:
+            log.warning("[TG미설정] %s", head)
             return
         try:
-            requests.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
-                          json={"chat_id": self.chat_id, "text": text}, timeout=10)
+            r = requests.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                              json={"chat_id": self.chat_id, "text": text}, timeout=10)
+            if r.ok:
+                log.info("[TG전송] %s", head)
+            else:
+                log.error("[TG거부] %s | %s", r.text[:150], head)
         except Exception as e:
-            log.error("텔레그램 실패: %s", e)
+            log.error("[TG오류] %s | %s", e, head)
 
 
 class PairCtx:
