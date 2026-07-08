@@ -40,6 +40,7 @@ STATE_PATH = os.path.join(BASE_DIR, "state.json")
 PAUSE_PATH = os.path.join(BASE_DIR, "PAUSE")
 TRADES_PATH = os.path.join(BASE_DIR, "trades.jsonl")
 OVERRIDES_PATH = os.path.join(BASE_DIR, "overrides.json")
+BASIS_PATH = os.path.join(BASE_DIR, "basis_history.jsonl")
 
 
 def load_overrides():
@@ -131,10 +132,18 @@ def status_report(engine):
     for p in engine.pairs:
         if p.fut_bid > 0 and p.perp_bid > 0 and engine.fx > 0:
             e, x = engine.premiums(p)
+            base = engine.baseline(p)
+            spread_warn = "" if engine.quotes_sane(p) else " ⚠️이상호가(장외/얇음)"
+            if base is None:
+                base_line = f"  기준선 수집 중 ({len(p.basis)}샘플)"
+            else:
+                base_line = (f"  기준선 {base*100:+.2f}% ({len(p.basis)}샘플)"
+                             f" | 이격: 진입 {(e-base)*100:+.2f}%p / 청산 {(x-base)*100:+.2f}%p")
             lines.append(f"{p.name} [{p.state['position']}]"
-                         + ("" if p.trade_enabled else " [비활성]")
+                         + ("" if p.trade_enabled else " [비활성]") + spread_warn
                          + f"\n  선물 {p.fut_bid:,.0f}/{p.fut_ask:,.0f} perp ${p.perp_bid:.2f}"
-                         f"\n  진입 {e*100:+.2f}% / 청산 {x*100:+.2f}% (오늘 {p.cycles['count']}사이클)")
+                         f"\n  프리미엄: 진입 {e*100:+.2f}% / 청산 {x*100:+.2f}% (오늘 {p.cycles['count']}사이클)\n"
+                         + base_line)
         else:
             lines.append(f"{p.name} [{p.state['position']}] 시세 대기 중")
     lines.append(f"환율 {engine.fx:,.1f} / 만기 D-{engine.pairs[0].days_to_expiry()}")
@@ -192,6 +201,8 @@ class PairCtx:
         self.executing = False
         self.cycles = {"date": "", "count": 0}
         self.trade_enabled = True   # preflight 실패 시 해당 페어만 비활성
+        self.basis = []             # [(ts, mid_prem)] 최근 7일 — 베이시스 기준선용
+        self.last_basis_ts = 0.0
 
     def days_to_expiry(self):
         exp = date.fromisoformat(self.cfg["futures_expiry"])
@@ -364,6 +375,55 @@ class Engine:
         self.last_status_ts = 0.0
         self.paused_notified = False
         self._load_state()
+        self._load_basis()
+
+    # ---------------- 베이시스 기준선 ----------------
+    # 진입/청산은 절대 프리미엄이 아니라 "기준선(최근 N일 평균 스프레드) 대비 이격"으로 판정.
+    # 데이터가 N일 미만이면 쌓인 만큼의 확장 평균 사용 (오늘→1일→...→7일 롤링).
+    def _basis_window_sec(self):
+        return self.cfg.get("strategy", {}).get("basis_window_days", 7) * 86400
+
+    def _load_basis(self):
+        if not os.path.exists(BASIS_PATH):
+            return
+        cutoff = time.time() - self._basis_window_sec()
+        by_key = {p.key: p for p in self.pairs}
+        for line in open(BASIS_PATH, encoding="utf-8"):
+            try:
+                r = json.loads(line)
+                if r["ts"] >= cutoff and r["key"] in by_key:
+                    by_key[r["key"]].basis.append((r["ts"], r["prem"]))
+            except (json.JSONDecodeError, KeyError):
+                pass
+        for p in self.pairs:
+            log.info("%s 베이시스 샘플 %d개 로드", p.key, len(p.basis))
+
+    def record_basis(self, p: PairCtx):
+        """60초마다 mid 기준 스프레드 샘플 적재 (판정과 무관하게 데이터 수집)."""
+        now = time.time()
+        if now - p.last_basis_ts < 60:
+            return
+        p.last_basis_ts = now
+        fut_mid = (p.fut_bid + p.fut_ask) / 2
+        perp_mid = (p.perp_bid + p.perp_ask) / 2
+        prem = perp_mid * self.fx / fut_mid - 1
+        p.basis.append((now, prem))
+        cutoff = now - self._basis_window_sec()
+        while p.basis and p.basis[0][0] < cutoff:
+            p.basis.pop(0)
+        try:
+            with open(BASIS_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": round(now, 1), "key": p.key,
+                                    "prem": round(prem, 6)}) + "\n")
+        except OSError as e:
+            log.warning("베이시스 기록 실패: %s", e)
+
+    def baseline(self, p: PairCtx):
+        """기준선 = 윈도 내 평균 스프레드. 샘플 부족 시 None (진입 보류)."""
+        min_n = self.cfg.get("strategy", {}).get("basis_min_samples", 10)
+        if len(p.basis) < min_n:
+            return None
+        return sum(v for _, v in p.basis) / len(p.basis)
 
     # ---------------- state ----------------
     def _load_state(self):
@@ -467,18 +527,22 @@ class Engine:
 
         self._status_log()
 
+        self.record_basis(p)
         if self.paused() or not p.trade_enabled:
             return
+        base = self.baseline(p)
+        if base is None:
+            return  # 기준선 샘플 수집 중 — 진입 보류
 
         entry_th, exit_th = self.thresholds(p)
-        if p.state["position"] == "flat" and entry >= entry_th:
+        if p.state["position"] == "flat" and (entry - base) >= entry_th:
             if now - p.last_alert_ts >= cooldown and self._cycle_ok(p):
                 p.last_alert_ts = now
-                self._dispatch(p, "enter", entry)
-        elif p.state["position"] == "open" and exit_ <= exit_th:
+                self._dispatch(p, "enter", entry, base)
+        elif p.state["position"] == "open" and (exit_ - base) <= exit_th:
             if now - p.last_alert_ts >= cooldown:
                 p.last_alert_ts = now
-                self._dispatch(p, "exit", exit_)
+                self._dispatch(p, "exit", exit_, base)
 
     def _status_log(self):
         now = time.time()
@@ -492,19 +556,19 @@ class Engine:
                          p.key, p.fut_bid, p.fut_ask, p.perp_bid, p.perp_ask,
                          e * 100, x * 100, p.state["position"])
 
-    def _dispatch(self, p: PairCtx, action, prem):
+    def _dispatch(self, p: PairCtx, action, prem, base=0.0):
+        gap = (prem - base) * 100
+        detail = f"이격 {gap:+.2f}%p (프리미엄 {prem*100:+.2f}%, 기준선 {base*100:+.2f}%)"
         if self.cfg["mode"] == "monitor":
             d2e = p.days_to_expiry()
             if action == "enter":
-                self.tg.send(f"🚨 [진입신호/모니터] {p.name}\n"
-                             f"perp vs 선물 프리미엄 {prem*100:+.2f}%\n"
+                self.tg.send(f"🚨 [진입신호/모니터] {p.name}\n{detail}\n"
                              f"선물 ask {p.fut_ask:,.0f} / perp bid ${p.perp_bid:.2f} (fx {self.fx:,.1f})\n"
                              f"→ 수동: 선물 {p.cfg['futures_code']} 매수 + perp 숏"
                              + (f"\n⚠️ 만기 D-{d2e}" if d2e <= 3 else ""))
                 p.state["position"] = "open"
             else:
-                self.tg.send(f"✅ [청산신호/모니터] {p.name}\n"
-                             f"perp vs 선물 프리미엄 {prem*100:+.2f}%\n"
+                self.tg.send(f"✅ [청산신호/모니터] {p.name}\n{detail}\n"
                              f"→ 수동: 선물 매도 + perp 숏 커버")
                 p.state["position"] = "flat"
             self.save_state()

@@ -28,8 +28,11 @@
   ],
   "_codes": "futures_code=KIS 시세용, order_code=거래소 표준(키움 주문용)",
   "strategy": {
-    "entry_threshold": 0.01,
+    "entry_threshold": 0.005,
     "exit_threshold": 0.0,
+    "_thresholds": "기준선(최근 N일 평균 스프레드) 대비 이격 기준. entry 0.005 = 기준선+0.5%p에 진입",
+    "basis_window_days": 7,
+    "basis_min_samples": 10,
     "alert_cooldown_sec": 600,
     "max_fut_spread": 0.003,
     "premium_sanity": 0.05
