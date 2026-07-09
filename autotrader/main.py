@@ -219,18 +219,20 @@ class Executor:
         self.tg = tg
 
     def _wait_fill(self, odno, want, timeout=15):
-        """(체결수량, 평균단가|None) — timeout 내 폴링."""
+        """(체결수량, 평균단가|None, 거부여부) — timeout 내 폴링, 거부 시 즉시 반환."""
         deadline = time.time() + timeout
         filled, avg_px = 0, None
         while time.time() < deadline:
-            q, px = self.broker.fill_info(odno)
+            q, px, rejected = self.broker.fill_info(odno)
+            if rejected:
+                return 0, None, True
             if q is not None:
                 filled = max(filled, q)
                 avg_px = px or avg_px
                 if filled >= want:
                     break
             time.sleep(1)
-        return filled, avg_px
+        return filled, avg_px, False
 
     def enter(self, engine, ctx: PairCtx, prem):
         code = ctx.cfg.get("order_code", ctx.cfg["futures_code"])
@@ -244,7 +246,10 @@ class Executor:
             self.tg.send(f"❌ {ctx.name} 선물 주문 실패: {odno}\n→ 진입 중단 (flat 유지)")
             return
 
-        filled, fut_px = self._wait_fill(odno, n)
+        filled, fut_px, rejected = self._wait_fill(odno, n)
+        if rejected:
+            self.tg.send(f"❌ {ctx.name} 선물 주문 거부됨 (증거금/예수금 확인 — 영웅문 주문내역에 사유 표시)\n→ 진입 중단")
+            return
         if filled == 0:
             ok_c, msg = self.broker.cancel(odno, code, n)
             self.tg.send(f"❌ {ctx.name} 선물 미체결(15s) → 취소 {'성공' if ok_c else '실패:'+msg}\n→ 진입 중단")
@@ -291,7 +296,10 @@ class Executor:
         if not ok:
             self.tg.send(f"❌ {ctx.name} 선물 매도 실패: {odno}\n→ 청산 중단, 다음 신호에 재시도")
             return
-        filled, exit_fut_px = self._wait_fill(odno, n)
+        filled, exit_fut_px, rejected = self._wait_fill(odno, n)
+        if rejected:
+            self.tg.send(f"❌ {ctx.name} 선물 매도 거부됨 — 수동 확인 필요 (포지션 유지 중)")
+            return
         if filled == 0:
             self.broker.cancel(odno, code, n)
             self.tg.send(f"❌ {ctx.name} 선물 매도 미체결 → 취소, 다음 신호에 재시도")

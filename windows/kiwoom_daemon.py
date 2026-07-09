@@ -96,6 +96,8 @@ class KiwoomDaemon:
         px = get(910)          # 체결가 (이번 체결 단가)
         if order_no:
             self.last_order_no = order_no
+            if "거부" in status:
+                self.fills.setdefault(order_no, {"qty": 0, "value": 0.0, "avg_px": 0.0})["rejected"] = True
             if filled:
                 try:
                     new_cum = int(filled)
@@ -229,7 +231,8 @@ def fill(order_no):
         return jsonify(ok=False, error="unauthorized"), 401
     if order_no in daemon.fills:
         rec = daemon.fills[order_no]
-        return jsonify(ok=True, filled=rec["qty"], avg_price=rec["avg_px"])
+        return jsonify(ok=True, filled=rec["qty"], avg_price=rec["avg_px"],
+                       rejected=rec.get("rejected", False))
     # 데몬 재시작 등으로 추적 이력 없음 → 실패로 응답 (봇이 타임아웃 처리)
     return jsonify(ok=False, error="unknown order_no")
 

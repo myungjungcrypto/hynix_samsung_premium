@@ -29,9 +29,9 @@ class KISBroker:
         return self.kis.filled_qty(order_no)
 
     def fill_info(self, order_no):
-        """(체결수량, 평균단가|None). KIS 경로는 단가 미지원 → None."""
+        """(체결수량, 평균단가|None, 거부여부). KIS 경로는 단가/거부 미지원."""
         q = self.kis.filled_qty(order_no)
-        return (q, None) if q is not None else (None, None)
+        return (q, None, False) if q is not None else (None, None, False)
 
     def cancel(self, order_no, code, qty):
         return self.kis.cancel(order_no, code, qty)
@@ -70,22 +70,22 @@ class KiwoomHTTPBroker:
             return False, f"gateway: {e}"
 
     def filled_qty(self, order_no):
-        q, _ = self.fill_info(order_no)
+        q, _, _ = self.fill_info(order_no)
         return q
 
     def fill_info(self, order_no):
-        """(체결수량, 평균단가|None)."""
+        """(체결수량, 평균단가|None, 거부여부)."""
         try:
             r = self.s.get(f"{self.base}/fill/{order_no}",
                            headers=self._headers(), timeout=10)
             d = r.json()
             if not d.get("ok"):
-                return None, None
+                return None, None, False
             px = d.get("avg_price") or None
-            return int(d["filled"]), (float(px) if px else None)
+            return int(d["filled"]), (float(px) if px else None), bool(d.get("rejected"))
         except Exception as e:
             log.warning("fill 조회 실패: %s", e)
-            return None, None
+            return None, None, False
 
     def cancel(self, order_no, code, qty):
         try:
