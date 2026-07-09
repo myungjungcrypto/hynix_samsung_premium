@@ -102,23 +102,42 @@ class HLTrader:
             log.warning("레버리지 설정 실패(%s): %s — 기존 설정으로 주문 진행", coin, e)
             return False
 
-    def balance(self):
-        """Perps 계좌 요약: (총액 USD, 가용 증거금 USD). 실패 시 None."""
+    def _clearinghouse(self, dex=""):
+        """dex별 perps 계좌 상태. HIP-3 dex(xyz 등)는 증거금 계좌가 분리되어 있어
+        기본 조회로는 잔고/포지션이 안 보인다 — 반드시 dex 지정 조회."""
+        payload = {"type": "clearinghouseState", "user": self.wallet}
+        if dex:
+            payload["dex"] = dex
+        import requests
+        base = getattr(self.info, "base_url", "https://api.hyperliquid.xyz")
+        r = requests.post(f"{base}/info", json=payload, timeout=10)
+        return r.json()
+
+    @staticmethod
+    def _dex_of(coin):
+        return coin.split(":")[0] if ":" in coin else ""
+
+    def balance(self, dex=""):
+        """해당 dex perps 계좌: (총액 USD, 가용 증거금 USD). 실패 시 None."""
         if not self.exchange:
             return None
         try:
-            st = self.info.user_state(self.wallet)
+            st = self._clearinghouse(dex)
             ms = st.get("marginSummary", {})
             return float(ms.get("accountValue", 0)), float(st.get("withdrawable", 0))
         except Exception as e:
-            log.warning("잔고 조회 실패: %s", e)
+            log.warning("잔고 조회 실패(dex=%s): %s", dex, e)
             return None
 
     def position(self, coin):
-        """해당 코인 포지션 수량 (숏이면 음수, 없으면 0). SDK 미설치 시 None."""
+        """해당 코인 포지션 수량 (숏이면 음수, 없으면 0). 코인의 dex 계좌에서 조회."""
         if not self.exchange:
             return None
-        state = self.info.user_state(self.wallet)
+        try:
+            state = self._clearinghouse(self._dex_of(coin))
+        except Exception as e:
+            log.warning("포지션 조회 실패(%s): %s", coin, e)
+            return None
         for ap in state.get("assetPositions", []):
             pos = ap.get("position", {})
             if pos.get("coin") == coin:
