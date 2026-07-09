@@ -31,9 +31,13 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QAxContainer import QAxWidget
 from PyQt5.QtCore import QTimer, QEventLoop
 
+_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s",
-                    stream=sys.stdout)
+                    handlers=[logging.StreamHandler(sys.stdout),
+                              logging.FileHandler(os.path.join(_LOG_DIR, "daemon.log"),
+                                                  encoding="utf-8")])
 log = logging.getLogger("kiwoom")
 
 

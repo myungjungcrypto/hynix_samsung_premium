@@ -155,9 +155,13 @@ def status_report(engine):
             lines.append("HL 증거금: 조회 실패")
     return "\n".join(lines)
 
+_LOG_DIR = os.path.join(os.path.dirname(BASE_DIR), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s",
-                    stream=sys.stdout)
+                    handlers=[logging.StreamHandler(sys.stdout),
+                              logging.FileHandler(os.path.join(_LOG_DIR, "autotrader.log"),
+                                                  encoding="utf-8")])
 log = logging.getLogger("auto")
 
 
