@@ -32,7 +32,8 @@ from PyQt5.QAxContainer import QAxWidget
 from PyQt5.QtCore import QTimer, QEventLoop
 
 logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s")
+                    format="%(asctime)s %(levelname)s %(message)s",
+                    stream=sys.stdout)
 log = logging.getLogger("kiwoom")
 
 
