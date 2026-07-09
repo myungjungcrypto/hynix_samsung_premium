@@ -128,7 +128,9 @@ def pnl_report(engine):
 
 def status_report(engine):
     lines = [f"🤖 mode={engine.cfg['mode']}"
-             + (" ⏸️일시정지" if os.path.exists(PAUSE_PATH) else "")]
+             + (" ⏸️일시정지" if os.path.exists(PAUSE_PATH) else "")
+             + ("" if engine.in_session()
+                else "\n⚠️ 장외 — 선물호가는 마감 시점 값, 프리미엄/이격은 참고용 (매매 안 함)")]
     for p in engine.pairs:
         if p.fut_bid > 0 and p.perp_bid > 0 and engine.fx > 0:
             e, x = engine.premiums(p)
