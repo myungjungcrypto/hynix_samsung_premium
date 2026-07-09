@@ -102,6 +102,18 @@ class HLTrader:
             log.warning("레버리지 설정 실패(%s): %s — 기존 설정으로 주문 진행", coin, e)
             return False
 
+    def balance(self):
+        """Perps 계좌 요약: (총액 USD, 가용 증거금 USD). 실패 시 None."""
+        if not self.exchange:
+            return None
+        try:
+            st = self.info.user_state(self.wallet)
+            ms = st.get("marginSummary", {})
+            return float(ms.get("accountValue", 0)), float(st.get("withdrawable", 0))
+        except Exception as e:
+            log.warning("잔고 조회 실패: %s", e)
+            return None
+
     def position(self, coin):
         """해당 코인 포지션 수량 (숏이면 음수, 없으면 0). SDK 미설치 시 None."""
         if not self.exchange:

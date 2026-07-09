@@ -147,6 +147,12 @@ def status_report(engine):
         else:
             lines.append(f"{p.name} [{p.state['position']}] 시세 대기 중")
     lines.append(f"환율 {engine.fx:,.1f} / 만기 D-{engine.pairs[0].days_to_expiry()}")
+    if engine.executor:
+        bal = engine.executor.hl.balance()
+        if bal:
+            lines.append(f"HL 증거금: ${bal[0]:,.0f} (가용 ${bal[1]:,.0f})")
+        else:
+            lines.append("HL 증거금: 조회 실패")
     return "\n".join(lines)
 
 logging.basicConfig(level=logging.INFO,
