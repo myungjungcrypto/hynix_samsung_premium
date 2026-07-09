@@ -149,14 +149,12 @@ def status_report(engine):
     lines.append(f"환율 {engine.fx:,.1f} / 만기 D-{engine.pairs[0].days_to_expiry()}")
     if engine.executor:
         hl = engine.executor.hl
-        dexs = sorted({hl._dex_of(p.cfg["perp_coin"]) for p in engine.pairs})
-        for dex in dexs:
+        spot = hl.spot_usdc()
+        parts = [f"Spot ${spot:,.0f}" if spot is not None else "Spot 조회실패"]
+        for dex in sorted({hl._dex_of(p.cfg["perp_coin"]) for p in engine.pairs}):
             bal = hl.balance(dex)
-            label = f"HL[{dex or 'main'}] 증거금"
-            if bal:
-                lines.append(f"{label}: ${bal[0]:,.0f} (가용 ${bal[1]:,.0f})")
-            else:
-                lines.append(f"{label}: 조회 실패")
+            parts.append(f"{dex or 'main'} ${bal[0]:,.0f}" if bal else f"{dex} 조회실패")
+        lines.append("HL 잔고: " + " / ".join(parts) + " (통합잔고 — Spot이 증거금으로 사용됨)")
     return "\n".join(lines)
 
 _LOG_DIR = os.path.join(os.path.dirname(BASE_DIR), "logs")

@@ -117,6 +117,24 @@ class HLTrader:
     def _dex_of(coin):
         return coin.split(":")[0] if ":" in coin else ""
 
+    def spot_usdc(self):
+        """Spot USDC 잔고. 통합 잔고 모델에서 실질 거래 가능액. 실패 시 None."""
+        if not self.exchange:
+            return None
+        try:
+            import requests
+            base = getattr(self.info, "base_url", "https://api.hyperliquid.xyz")
+            r = requests.post(f"{base}/info",
+                              json={"type": "spotClearinghouseState", "user": self.wallet},
+                              timeout=10)
+            for b in r.json().get("balances", []):
+                if b.get("coin") == "USDC":
+                    return float(b.get("total", 0))
+            return 0.0
+        except Exception as e:
+            log.warning("spot 잔고 조회 실패: %s", e)
+            return None
+
     def balance(self, dex=""):
         """해당 dex perps 계좌: (총액 USD, 가용 증거금 USD). 실패 시 None."""
         if not self.exchange:
