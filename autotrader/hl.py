@@ -64,25 +64,43 @@ class HLTrader:
       - 격리마진 3배 설정 후 주문
     """
 
-    def __init__(self, wallet_address, private_key, leverage=3):
+    def __init__(self, wallet_address, private_key, leverage=3, perp_dexs=None):
+        """perp_dexs: 거래할 builder dex 목록 (예: ["xyz"]). 미지정 시 기본 dex만 로드되어
+        trade.xyz 종목(xyz:SKHX 등)의 자산 매핑이 없어 주문이 KeyError로 실패한다."""
         self.wallet = wallet_address
         self.leverage = leverage
+        dexs = [""] + [d for d in (perp_dexs or []) if d]
         try:
             from hyperliquid.exchange import Exchange
             from hyperliquid.info import Info
             import eth_account
             account = eth_account.Account.from_key(private_key)
-            self.exchange = Exchange(account, account_address=wallet_address)
-            self.info = Info(skip_ws=True)
+            self.exchange = Exchange(account, account_address=wallet_address, perp_dexs=dexs)
+            self.info = Info(skip_ws=True, perp_dexs=dexs)
         except ImportError:
             self.exchange = None
             log.warning("hyperliquid-python-sdk 미설치 — 주문 비활성 (모니터 전용)")
 
+    def can_trade(self, coin):
+        """코인이 자산 매핑에 있는지 (dex 로드 확인). (가능여부, 메시지)"""
+        if not self.exchange:
+            return False, "SDK 미설치"
+        try:
+            self.info.name_to_asset(coin)
+            return True, "ok"
+        except Exception as e:
+            return False, f"{coin} 자산 매핑 없음 (dex 미로드?): {e}"
+
     def ensure_leverage(self, coin):
+        """격리 레버리지 설정. 실패해도 주문은 진행 가능하므로 False만 반환 (헤지 우선)."""
         if not self.exchange:
             return False
-        self.exchange.update_leverage(self.leverage, coin, is_cross=False)
-        return True
+        try:
+            self.exchange.update_leverage(self.leverage, coin, is_cross=False)
+            return True
+        except Exception as e:
+            log.warning("레버리지 설정 실패(%s): %s — 기존 설정으로 주문 진행", coin, e)
+            return False
 
     def position(self, coin):
         """해당 코인 포지션 수량 (숏이면 음수, 없으면 0). SDK 미설치 시 None."""

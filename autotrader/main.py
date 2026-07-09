@@ -253,9 +253,13 @@ class Executor:
             self.broker.cancel(odno, code, n - filled)
 
         size = filled * mult
-        self.hl.ensure_leverage(coin)
-        ok2, res = self.hl.market_order(coin, is_buy=False, size=size)
+        try:
+            self.hl.ensure_leverage(coin)
+            ok2, res = self.hl.market_order(coin, is_buy=False, size=size)
+        except Exception as e:
+            ok2, res = False, f"예외 {e}"
         if not ok2:
+            # 어떤 이유로든 perp 숏이 안 되면 즉시 선물 언와인드 (헤지 없는 방향 노출 방지)
             ok3, od2 = self.broker.order(code, "sell", filled, price=0)
             self.tg.send(f"🚨 {ctx.name} perp 숏 실패({res})\n→ 선물 언와인드 {'주문완료' if ok3 else '❌실패 — 수동 개입 필요!'}")
             return
@@ -294,7 +298,10 @@ class Executor:
             return
 
         cover = perp_size * (filled / n)
-        ok2, res = self.hl.market_close(coin, cover)
+        try:
+            ok2, res = self.hl.market_close(coin, cover)
+        except Exception as e:
+            ok2, res = False, f"예외 {e}"
         if not ok2:
             self.tg.send(f"🚨 {ctx.name} perp 커버 실패({res}) — perp 숏 {cover}주 잔존, 수동 확인 필요!")
             res = {}
@@ -766,7 +773,10 @@ def live_preflight(cfg, engine, broker, tg):
         errors.append("HL_WALLET_ADDRESS / HL_PRIVATE_KEY 미설정")
     hl = None
     if not errors:
-        hl = HLTrader(wallet, pkey, cfg["hyperliquid"].get("leverage", 3))
+        # trade.xyz 같은 builder dex 코인은 dex 명시 로드 필요 (없으면 주문 시 KeyError)
+        dexs = sorted({p.cfg["perp_coin"].split(":")[0]
+                       for p in engine.pairs if ":" in p.cfg["perp_coin"]})
+        hl = HLTrader(wallet, pkey, cfg["hyperliquid"].get("leverage", 3), perp_dexs=dexs)
         if not hl.exchange:
             errors.append("hyperliquid-python-sdk 미설치")
     if errors:
@@ -777,6 +787,9 @@ def live_preflight(cfg, engine, broker, tg):
     roll_d = cfg["session"].get("roll_days_before_expiry", 2)
     for p in engine.pairs:
         pair_issues = []
+        ok_c, msg_c = hl.can_trade(p.cfg["perp_coin"])
+        if not ok_c:
+            pair_issues.append(f"HL 주문 불가: {msg_c}")
         pos = hl.position(p.cfg["perp_coin"])
         expected = -(p.state.get("perp_size", 0)) if p.state.get("position") == "open" else 0.0
         if pos is not None and abs(pos - expected) > 0.01:
