@@ -205,27 +205,37 @@ class HLTrader:
         except Exception as e:
             return False, str(e)
 
-    def fills_for_oids(self, oids):
-        """주문 ID들의 실측 수수료·실현손익 합산. 반환 {fee, closed_pnl} (USDC), 실패 시 None."""
+    def fills_for_oids(self, oids, require=None, retries=5, wait_sec=2):
+        """주문 ID들의 실측 수수료·실현손익 합산. 반환 {fee, closed_pnl, matched:set}.
+
+        체결 직후에는 user_fills 인덱스 반영이 늦을 수 있어, require의 oid가
+        전부 잡힐 때까지 재시도한다 (레이스 방지 — closedPnl 0 오보의 원인).
+        """
         if not self.exchange:
             return None
-        try:
-            oids = {int(o) for o in oids if o is not None}
-            fills = self.info.user_fills(self.wallet)
-            fee = 0.0
-            closed = 0.0
-            matched = 0
+        want = {int(o) for o in oids if o is not None}
+        need = {int(o) for o in (require or []) if o is not None}
+        for attempt in range(retries):
+            try:
+                fills = self.info.user_fills(self.wallet)
+            except Exception as e:
+                log.warning("user_fills 조회 실패: %s", e)
+                return None
+            fee = closed = 0.0
+            matched = set()
             for f in fills:
-                if int(f.get("oid", -1)) in oids:
+                oid = int(f.get("oid", -1))
+                if oid in want:
                     fee += float(f.get("fee", 0))
                     closed += float(f.get("closedPnl", 0))
-                    matched += 1
-            if matched == 0:
-                return None
-            return {"fee": fee, "closed_pnl": closed}
-        except Exception as e:
-            log.warning("user_fills 조회 실패: %s", e)
-            return None
+                    matched.add(oid)
+            if need.issubset(matched) and matched:
+                return {"fee": fee, "closed_pnl": closed, "matched": matched}
+            time.sleep(wait_sec)
+        if matched:
+            log.warning("user_fills 일부만 매칭: %s (필요 %s)", matched, need)
+            return {"fee": fee, "closed_pnl": closed, "matched": matched}
+        return None
 
     def funding_between(self, coin, start_ms, end_ms):
         """보유 기간 동안 해당 코인의 펀딩 수취 합계 (USDC, +면 수취). 실패 시 None."""

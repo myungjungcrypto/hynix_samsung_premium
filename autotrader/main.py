@@ -362,11 +362,13 @@ class Executor:
         kiwoom_fee = (entry_px + exit_px) * mult * filled * fee_rate
 
         settle = "full"
-        hl_detail = self.hl.fills_for_oids([st.get("entry_hl_oid"), hl_res.get("oid")])
+        entry_oid, exit_oid = st.get("entry_hl_oid"), hl_res.get("oid")
+        # 청산 체결(exit_oid)이 인덱스에 잡힐 때까지 재시도 — 진입만 매칭되면 closedPnl이 0으로 나옴
+        hl_detail = self.hl.fills_for_oids([entry_oid, exit_oid], require=[exit_oid])
         funding = self.hl.funding_between(ctx.cfg["perp_coin"],
                                           st.get("entry_ts", time.time()) * 1000,
                                           time.time() * 1000)
-        if hl_detail is None:
+        if hl_detail is None or (exit_oid and int(exit_oid) not in hl_detail.get("matched", set())):
             # 폴백: 체결 평균가 기반 (수수료 미반영)
             e_px, x_px = st.get("entry_hl_px") or 0, hl_res.get("avg_px") or 0
             hl_detail = {"closed_pnl": (e_px - x_px) * float(hl_res.get("size", 0)), "fee": 0.0}
