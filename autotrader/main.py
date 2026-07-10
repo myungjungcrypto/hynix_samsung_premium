@@ -139,8 +139,15 @@ def status_report(engine):
             if base is None:
                 base_line = f"  기준선 수집 중 ({len(p.basis)}샘플)"
             else:
-                base_line = (f"  기준선 {base*100:+.2f}% ({len(p.basis)}샘플)"
-                             f" | 이격: 진입 {(e-base)*100:+.2f}%p / 청산 {(x-base)*100:+.2f}%p")
+                e_th, x_th = engine.thresholds(p)
+                if p.state["position"] == "flat":
+                    gap = (e - base) * 100
+                    base_line = (f"  기준선 {base*100:+.2f}% ({len(p.basis)}샘플)\n"
+                                 f"  이격 {gap:+.2f}%p → 진입(+{e_th*100:.2f}%p)까지 {max(0.0, e_th*100-gap):.2f}%p 남음")
+                else:
+                    gap = (x - base) * 100
+                    base_line = (f"  기준선 {base*100:+.2f}% ({len(p.basis)}샘플)\n"
+                                 f"  이격 {gap:+.2f}%p → 청산({x_th*100:.2f}%p 이하)까지 {max(0.0, gap-x_th*100):.2f}%p 남음")
             lines.append(f"{p.name} [{p.state['position']}]"
                          + ("" if p.trade_enabled else " [비활성]") + spread_warn
                          + f"\n  선물 {p.fut_bid:,.0f}/{p.fut_ask:,.0f} perp ${p.perp_bid:.2f}"
