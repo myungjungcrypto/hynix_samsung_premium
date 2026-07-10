@@ -40,17 +40,20 @@
   "session": {
     "start": "08:45",
     "end": "15:34",
-    "roll_days_before_expiry": 2
+    "roll_days_before_expiry": 2,
+    "no_entry_before": "09:15"
   },
   "hyperliquid": {
     "leverage": 3,
-    "isolated": true
+    "isolated": true,
+    "entry_slippage": 0.0015,
+    "exit_slippage": 0.003
   },
   "live": {
     "max_cycles_per_day": 3
   },
   "fees": {
-    "kiwoom_fee_rate": 0.00003,
+    "kiwoom_fee_rate": 3e-05,
     "_comment": "키움 주식선물 편도 수수료율(약정금액 대비). 영웅문 앱에서 본인 약정 요율 확인 후 수정"
   },
   "broker": {

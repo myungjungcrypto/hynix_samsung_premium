@@ -260,9 +260,10 @@ class Executor:
         coin = ctx.cfg["perp_coin"]
         mult = ctx.cfg["contract_multiplier"]
         n = ctx.cfg.get("max_contracts", 1)
-        self.tg.send(f"⚙️ [진입 실행] {ctx.name} 선물 {code} {n}계약 시장가 매수 (프리미엄 {prem*100:+.2f}%)")
+        limit_px = int(ctx.fut_ask)  # 신호 시점 매도호가 지정가 — 슬리피지 차단
+        self.tg.send(f"⚙️ [진입 실행] {ctx.name} 선물 {code} {n}계약 지정가 {limit_px:,} 매수 (프리미엄 {prem*100:+.2f}%)")
 
-        ok, odno = self.broker.order(code, "buy", n, price=0)
+        ok, odno = self.broker.order(code, "buy", n, price=limit_px)
         if not ok:
             self.tg.send(f"❌ {ctx.name} 선물 주문 실패: {odno}\n→ 진입 중단 (flat 유지)")
             return
@@ -281,7 +282,8 @@ class Executor:
         size = filled * mult
         try:
             self.hl.ensure_leverage(coin)
-            ok2, res = self.hl.market_order(coin, is_buy=False, size=size)
+            slip = self.cfg.get("hyperliquid", {}).get("entry_slippage", 0.0015)
+            ok2, res = self.hl.market_order(coin, is_buy=False, size=size, slippage=slip)
         except Exception as e:
             ok2, res = False, f"예외 {e}"
         if not ok2:
@@ -311,13 +313,23 @@ class Executor:
             ctx.state = {"position": "flat"}
             engine.save_state()
             return
-        self.tg.send(f"⚙️ [청산 실행] {ctx.name} 선물 {n}계약 매도 + perp 커버 (프리미엄 {prem*100:+.2f}%)")
+        limit_px = int(ctx.fut_bid)
+        self.tg.send(f"⚙️ [청산 실행] {ctx.name} 선물 {n}계약 지정가 {limit_px:,} 매도 + perp 커버 (프리미엄 {prem*100:+.2f}%)")
 
-        ok, odno = self.broker.order(code, "sell", n, price=0)
+        ok, odno = self.broker.order(code, "sell", n, price=limit_px)
         if not ok:
             self.tg.send(f"❌ {ctx.name} 선물 매도 실패: {odno}\n→ 청산 중단, 다음 신호에 재시도")
             return
-        filled, exit_fut_px, rejected = self._wait_fill(odno, n)
+        filled, exit_fut_px, rejected = self._wait_fill(odno, n, timeout=10)
+        if not rejected and filled < n:
+            # 지정가 미체결 → 취소 후 시장가 폴백 (청산은 확실성 우선)
+            self.broker.cancel(odno, code, n - filled)
+            ok, odno2 = self.broker.order(code, "sell", n - filled, price=0)
+            if ok:
+                f2, px2, rejected = self._wait_fill(odno2, n - filled)
+                if f2 > 0:
+                    exit_fut_px = ((exit_fut_px or 0) * filled + (px2 or ctx.fut_bid) * f2) / (filled + f2)
+                    filled += f2
         if rejected:
             self.tg.send(f"❌ {ctx.name} 선물 매도 거부됨 — 수동 확인 필요 (포지션 유지 중)")
             return
@@ -328,7 +340,8 @@ class Executor:
 
         cover = perp_size * (filled / n)
         try:
-            ok2, res = self.hl.market_close(coin, cover)
+            slip = self.cfg.get("hyperliquid", {}).get("exit_slippage", 0.003)
+            ok2, res = self.hl.market_close(coin, cover, slippage=slip)
         except Exception as e:
             ok2, res = False, f"예외 {e}"
         if not ok2:
@@ -574,6 +587,9 @@ class Engine:
 
         entry_th, exit_th = self.thresholds(p)
         if p.state["position"] == "flat" and (entry - base) >= entry_th:
+            no_entry_before = dtime.fromisoformat(self.cfg["session"].get("no_entry_before", "09:15"))
+            if datetime.now(KST).time() < no_entry_before:
+                return  # 개장 직후 변동성 구간 — 신규 진입 금지 (청산은 허용)
             if now - p.last_alert_ts >= cooldown and self._cycle_ok(p):
                 p.last_alert_ts = now
                 self._dispatch(p, "enter", entry, base)
