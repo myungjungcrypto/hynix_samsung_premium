@@ -14,3 +14,4 @@ STRATEGY_GUIDE.md
 autotrader/trades.jsonl
 autotrader/overrides.json
 autotrader/basis_history.jsonl
+autotrader/oi_history.jsonl

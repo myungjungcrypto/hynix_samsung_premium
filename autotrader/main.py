@@ -754,6 +754,35 @@ async def tg_commands(engine, tg):
             await asyncio.sleep(10)
 
 
+OI_PATH = os.path.join(BASE_DIR, "oi_history.jsonl")
+
+
+async def oi_loop(engine, interval=3600):
+    """1시간마다 perp OI·마크가격·펀딩 기록 (공식 히스토리 API가 없어 자체 적재)."""
+    dexs = sorted({p.cfg["perp_coin"].split(":")[0] for p in engine.pairs if ":" in p.cfg["perp_coin"]})
+    coins = {p.cfg["perp_coin"] for p in engine.pairs}
+    while True:
+        for dex in dexs:
+            try:
+                r = requests.post("https://api.hyperliquid.xyz/info",
+                                  json={"type": "metaAndAssetCtxs", "dex": dex}, timeout=10).json()
+                meta, ctxs = r
+                with open(OI_PATH, "a", encoding="utf-8") as f:
+                    for a, c in zip(meta["universe"], ctxs):
+                        if a["name"] in coins:
+                            f.write(json.dumps({
+                                "ts": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+                                "coin": a["name"],
+                                "oi": float(c["openInterest"]),
+                                "mark": float(c["markPx"]),
+                                "funding_1h": float(c["funding"]),
+                                "day_vlm_usd": float(c["dayNtlVlm"]),
+                            }) + "\n")
+            except Exception as e:
+                log.warning("OI 기록 실패(%s): %s", dex, e)
+        await asyncio.sleep(interval)
+
+
 async def fx_loop(engine, interval):
     url = "https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?range=1d&interval=1m"
     naver = ("https://m.stock.naver.com/front-api/marketIndex/productDetail"
@@ -896,6 +925,7 @@ async def main():
         kis_stream.run(),
         hl_stream.run(),
         fx_loop(engine, cfg.get("fx_poll_sec", 30)),
+        oi_loop(engine),
         watchdog(engine, kis, tg),
         tg_commands(engine, tg),
     )
