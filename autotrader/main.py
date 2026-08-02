@@ -646,9 +646,10 @@ class Engine:
 
 
 def handle_set(engine, cmd):
-    """`set entry 0.7 [KEY]` / `set exit 0.1 [KEY]` — 임계값 변경 (% 단위 입력, 재시작 후에도 유지).
+    """`set entry 0.7 [KEY]` / `set exit 0.1 [KEY]` / `set size 7 [KEY]` — 런타임 설정 변경.
 
-    KEY 생략 시 전체 공통값 변경, KEY(skhx/smsn) 지정 시 해당 종목만.
+    임계값은 % 단위, size는 계약수. KEY(skhx/smsn) 생략 시 전체 적용.
+    overrides.json에 저장되어 재시작 후에도 유지.
     """
     parts = cmd.split()
     strat = engine.cfg["strategy"]
@@ -662,16 +663,42 @@ def handle_set(engine, cmd):
                 marks.append("진입 개별")
             if "exit_threshold" in p.cfg:
                 marks.append("청산 개별")
-            lines.append(f"- {p.name}: 진입 +{e_th*100:.2f}% / 청산 {x_th*100:.2f}%"
+            lines.append(f"- {p.name}: {p.cfg.get('max_contracts', 1)}계약"
+                         f" / 진입 +{e_th*100:.2f}% / 청산 {x_th*100:.2f}%"
                          + (f" ({', '.join(marks)})" if marks else ""))
         return "\n".join(lines)
 
     if len(parts) < 3:
         return current()
 
-    field = {"entry": "entry_threshold", "exit": "exit_threshold"}.get(parts[1])
+    kind = parts[1]
+    key = parts[3].upper() if len(parts) > 3 else None
+    targets = engine.pairs
+    if key:
+        pair = next((p for p in engine.pairs if p.key == key), None)
+        if not pair:
+            return f"모르는 종목: {key} (가능: " + ", ".join(p.key for p in engine.pairs) + ")"
+        targets = [pair]
+
+    ov = load_overrides()
+
+    if kind == "size":
+        try:
+            n = int(parts[2])
+        except ValueError:
+            return f"계약수가 아님: {parts[2]} (예: set size 7 smsn)"
+        if not (1 <= n <= 50):
+            return f"계약수는 1~50 범위로 (입력: {n})"
+        for p in targets:
+            p.cfg["max_contracts"] = n
+            ov.setdefault("pairs", {}).setdefault(p.key, {})["max_contracts"] = n
+        save_overrides(ov)
+        log.info("계약수 변경: %d (%s)", n, key or "전체")
+        return "✅ 변경 완료 (다음 진입부터 적용, 보유 중 포지션은 영향 없음)\n" + current()
+
+    field = {"entry": "entry_threshold", "exit": "exit_threshold"}.get(kind)
     if not field:
-        return "형식: set entry 0.7 [skhx]  /  set exit 0.1 [smsn]"
+        return "형식: set entry 0.7 [skhx] / set exit 0.1 [smsn] / set size 7 [smsn]"
     try:
         pct = float(parts[2])
     except ValueError:
@@ -682,13 +709,8 @@ def handle_set(engine, cmd):
         return f"청산 임계값은 -1~2(%) 범위로 (입력: {pct})"
     val = pct / 100
 
-    ov = load_overrides()
-    key = parts[3].upper() if len(parts) > 3 else None
     if key:
-        pair = next((p for p in engine.pairs if p.key == key), None)
-        if not pair:
-            return f"모르는 종목: {key} (가능: " + ", ".join(p.key for p in engine.pairs) + ")"
-        pair.cfg[field] = val
+        targets[0].cfg[field] = val
         ov.setdefault("pairs", {}).setdefault(key, {})[field] = val
     else:
         strat[field] = val
@@ -748,6 +770,7 @@ async def tg_commands(engine, tg):
                     reply("명령: pnl(성과) / status(현황) / pause / resume\n"
                           "set entry 0.7 — 진입 임계값 0.7%로\n"
                           "set exit 0.1 [skhx] — 청산 임계값 (종목 지정 가능)\n"
+                          "set size 7 smsn — 계약수 변경\n"
                           "set — 현재 설정 보기")
         except Exception as e:
             log.warning("텔레그램 명령 폴링 오류: %s", e)
