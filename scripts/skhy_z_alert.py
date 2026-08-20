@@ -6,7 +6,7 @@
 시그널 (CONFIRM_N회 연속 충족 시 발화):
   🔴 z >= +2        → 프리미엄 숏 진입 (SKHY 숏 / SKHX 롱)
   🟢 z <= -2        → 프리미엄 롱 진입
-  ⚪ |z| <= 0.15    → 포지션 청산 (평균 복귀)
+  ⚪ 숏: z <= -0.5 / 롱: z >= +0.5 → 청산 (평균 지나 오버슈팅까지)
   🛑 z >= +3.5 또는 프리미엄 >= 55% → 하드스톱 (레짐 전환 방어선)
 
 사용법:
@@ -35,10 +35,10 @@ ORD_COIN = "xyz:SKHX"
 ADR_PER_ORD = 0.1          # 1 ADR = 본주 0.1주
 
 INTERVAL_SEC = 300         # 5분 샘플
-WINDOW_DAYS = 21           # 롤링 윈도우
+WINDOW_DAYS = 14           # 롤링 윈도우 (백테스트 2026-08: 21d는 신호 과소, 7d는 과적합 위험 → 14d)
 MIN_SAMPLES = 1000         # 이 미만이면 수집만
 ENTRY_Z = 2.0
-EXIT_Z = 0.15
+EXIT_Z = -0.5              # 오버슈팅 청산 (백테스트: z=0 청산 대비 SKHY +9%p, TSMC +1~5%p/년 우위)
 HARD_Z = 3.5
 HARD_PREM = 0.55
 CONFIRM_N = 3              # 연속 충족 횟수 (15분)
@@ -176,7 +176,7 @@ def fire(sig, st, z, mu, sigma, prem, adr, ordi):
     head = {
         "enter_short": "🔴 [SKHY z-알림] 프리미엄 숏 진입 시그널 (z ≥ +2)",
         "enter_long": "🟢 [SKHY z-알림] 프리미엄 롱 진입 시그널 (z ≤ -2)",
-        "exit": "⚪ [SKHY z-알림] 청산 시그널 (z ≈ 0 복귀)",
+        "exit": "⚪ [SKHY z-알림] 청산 시그널 (오버슈팅 ∓0.5 도달)",
         "hardstop": "🛑 [SKHY z-알림] 하드스톱! (z ≥ +3.5 또는 프리미엄 ≥ 55%)",
     }[sig]
     tg_send(f"{head}\n"
