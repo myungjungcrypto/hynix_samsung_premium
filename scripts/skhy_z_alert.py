@@ -181,7 +181,7 @@ def fire(sig, st, z, mu, sigma, prem, adr, ordi):
     }[sig]
     tg_send(f"{head}\n"
             f"프리미엄 {prem*100:+.2f}% | z = {z:+.2f}\n"
-            f"μ(21d) = {mu*100:.2f}% | σ = {sigma*100:.2f}%p\n"
+            f"μ({WINDOW_DAYS}d) = {mu*100:.2f}% | σ = {sigma*100:.2f}%p\n"
             f"SKHY ${adr:,.2f} / SKHX ${ordi:,.2f}\n"
             f"({CONFIRM_N}회 연속 확인 완료)")
     st["pos"] = {"enter_short": "short", "enter_long": "long",

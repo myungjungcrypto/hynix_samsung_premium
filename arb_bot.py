@@ -316,7 +316,7 @@ def handle_commands(tg, cmds, cfg, state, session):
                     tg.send(
                         f"📐 <b>SKHY/SKHX 프리미엄 z-스코어</b>\n"
                         f"프리미엄 {prem*100:+.2f}% | <b>z = {z:+.2f}</b>\n"
-                        f"μ(21d) {mu*100:.2f}% | σ {sigma*100:.2f}%p | 샘플 {len(rows):,}개\n"
+                        f"μ({za.WINDOW_DAYS}d) {mu*100:.2f}% | σ {sigma*100:.2f}%p | 샘플 {len(rows):,}개\n"
                         f"SKHY ${adr:,.2f} / SKHX ${ordi:,.2f}\n"
                         f"봇 포지션: {pos} | 규칙: 진입 ±2 / 청산 ∓0.5 / 하드스톱 +3.5·55% (14d)")
             except Exception as e:
