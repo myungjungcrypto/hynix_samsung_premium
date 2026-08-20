@@ -15,6 +15,7 @@ trade.xyz (Hyperliquid xyz dex) perp vs KRX 현물 프리미엄 재정거래 알
 
 텔레그램 명령:
   /status        현재 프리미엄 조회 (장외 시간에도 동작, 현물은 마지막 체결가)
+  /z             SKHY/SKHX 프리미엄 z-스코어 실시간 조회 (scripts/skhy_z_alert.py 데이터)
   /open SKHX     해당 종목 상태를 '진입함'으로 수동 변경
   /flat SKHX     해당 종목 상태를 '청산함'으로 수동 변경
 """
@@ -300,8 +301,28 @@ def handle_commands(tg, cmds, cfg, state, session):
             state[key]["last_alert_ts"] = 0
             save_state(state)
             tg.send(f"✅ {matched[0]['name']} 상태 → {state[key]['position']}")
+        elif name == "z":
+            try:
+                sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+                import skhy_z_alert as za
+                adr, ordi, prem = za.fetch_premium()
+                rows = za.load_hist()
+                z, mu, sigma = za.zscore(rows, prem)
+                pos = za.load_state().get("pos", "flat")
+                if z is None:
+                    tg.send(f"📐 SKHY z: 데이터 수집중 ({len(rows)}/{za.MIN_SAMPLES})\n"
+                            f"프리미엄 {prem*100:+.2f}% (SKHY ${adr:,.2f} / SKHX ${ordi:,.2f})")
+                else:
+                    tg.send(
+                        f"📐 <b>SKHY/SKHX 프리미엄 z-스코어</b>\n"
+                        f"프리미엄 {prem*100:+.2f}% | <b>z = {z:+.2f}</b>\n"
+                        f"μ(21d) {mu*100:.2f}% | σ {sigma*100:.2f}%p | 샘플 {len(rows):,}개\n"
+                        f"SKHY ${adr:,.2f} / SKHX ${ordi:,.2f}\n"
+                        f"봇 포지션: {pos} | 규칙: 진입 ±2 / 청산 0 / 하드스톱 +3.5·55%")
+            except Exception as e:
+                tg.send(f"z 조회 실패: {e}")
         else:
-            tg.send("명령: status / open SKHX / flat SKHX (open·flat은 종목 SKHX 또는 SMSN)")
+            tg.send("명령: status / z / open SKHX / flat SKHX (open·flat은 종목 SKHX 또는 SMSN)")
 
 
 def check_pair(tg, cfg, state, pair, p, now_ts):
