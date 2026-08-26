@@ -226,6 +226,56 @@ class KiwoomDaemon:
             "positions": positions,
         }
 
+    def _balance_probe(self):
+        """opw20010/opw20007 출력 필드명 탐색 — 값이 비어있지 않은 필드만 반환.
+
+        /balance 가 0만 내놓을 때 실제 필드명을 알아내기 위한 디버그용.
+        """
+        acc = self.account
+        cand10 = [
+            "예수금", "예수금액", "인출가능금액", "인출가능총액", "출금가능금액",
+            "위탁증거금", "위탁증거금총액", "현금증거금", "유지증거금", "유지증거금총액",
+            "평가예탁총액", "예탁총액", "예탁금", "추정예탁자산", "총평가손익",
+            "평가손익", "평가손익금액", "매매가능금액", "주문가능금액", "주문가능총액",
+            "청산가능금액", "총매입금액", "대용금액", "기본예탁금", "선물정산차금",
+            "옵션평가손익", "미수금", "수수료", "결제예정금액", "청산차금",
+        ]
+        cand07 = [
+            "종목코드", "종목번호", "종목명", "매도매수구분", "매매구분", "수량",
+            "보유수량", "평균단가", "매입단가", "현재가", "평가손익", "평가금액",
+            "손익율", "손익률", "청산가능수량", "매입금액", "약정금액", "매매손익",
+            "합계손익", "총평가손익",
+        ]
+
+        rq1 = "선물예수금탐색"
+        self._tr_request(rq1, "opw20010", {
+            "계좌번호": acc, "비밀번호": "", "비밀번호입력매체구분": "00",
+        }, "9103")
+        found10 = {}
+        for f in cand10:
+            v = self._tr_get("opw20010", rq1, 0, f)
+            if v:
+                found10[f] = v
+
+        rq2 = "선물잔고탐색"
+        found07 = {}
+        cnt = 0
+        try:
+            self._tr_request(rq2, "opw20007", {
+                "계좌번호": acc, "비밀번호": "", "비밀번호입력매체구분": "00",
+            }, "9104")
+            cnt = self.ocx.dynamicCall(
+                "GetRepeatCnt(QString, QString)", "opw20007", rq2)
+            if cnt > 0:
+                for f in cand07:
+                    v = self._tr_get("opw20007", rq2, 0, f)
+                    if v:
+                        found07[f] = v
+        except Exception as e:
+            found07["_error"] = str(e)
+
+        return {"opw20010": found10, "opw20007": found07, "opw20007_rows": cnt}
+
     # ---------------- 작업 처리 (Qt 스레드) ----------------
     def _drain_jobs(self):
         try:
@@ -331,6 +381,18 @@ def balance():
     if not daemon.connected:
         return jsonify(ok=False, error="키움 미로그인")
     r = daemon.call(daemon._futures_balance, timeout=25)
+    if "error" in r and "value" not in r:
+        return jsonify(ok=False, error=r["error"])
+    return jsonify(ok=True, **r["value"])
+
+
+@flask_app.route("/balance_debug")
+def balance_debug():
+    if not _auth():
+        return jsonify(ok=False, error="unauthorized"), 401
+    if not daemon.connected:
+        return jsonify(ok=False, error="키움 미로그인")
+    r = daemon.call(daemon._balance_probe, timeout=30)
     if "error" in r and "value" not in r:
         return jsonify(ok=False, error=r["error"])
     return jsonify(ok=True, **r["value"])
