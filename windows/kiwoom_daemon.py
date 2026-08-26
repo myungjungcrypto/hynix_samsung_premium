@@ -28,6 +28,7 @@
 """
 import logging
 import os
+from datetime import datetime
 import queue
 import sys
 import threading
@@ -170,59 +171,70 @@ class KiwoomDaemon:
                 return 0
 
     def _futures_balance(self):
-        """선물옵션 계좌 잔고 — 예수금상세(opw20010) + 잔고정밀(opw20007).
+        """선물옵션 계좌 잔고 — KOA Studio 실스펙 기준.
 
-        출력값이 전부 0이면 KOA Studio에서 두 TR의 출력 필드명을 확인해
-        아래 한글 필드명을 맞출 것. 계좌비밀번호는 트레이 AUTO 저장 상태면
-        빈 문자열로 통과된다.
+        OPW20010(선옵예탁금및증거금조회): TR코드 대문자 필수.
+        opw20006(선옵잔고상세현황): 포지션 목록.
+        계좌비밀번호는 트레이 AUTO 저장 상태면 빈 문자열로 통과된다.
         """
         acc = self.account
-        rq1 = "선물예수금"
-        self._tr_request(rq1, "opw20010", {
+        rq1 = "선옵예탁금"
+        self._tr_request(rq1, "OPW20010", {
             "계좌번호": acc,
             "비밀번호": "",
             "비밀번호입력매체구분": "00",
         }, "9101")
-        g1 = lambda f: self._tr_get("opw20010", rq1, 0, f)
-        total = self._tr_num(g1("평가예탁총액"))
-        deposit = self._tr_num(g1("예수금"))
-        margin = self._tr_num(g1("위탁증거금총액")) or self._tr_num(g1("증거금총액"))
+        g1 = lambda f: self._tr_get("OPW20010", rq1, 0, f)
+        deposit_total = self._tr_num(g1("예탁총액"))
+        net_asset = self._tr_num(g1("순자산금액"))
+        deposit_cash = self._tr_num(g1("예탁현금"))
+        margin = self._tr_num(g1("증거금총액"))
+        orderable = self._tr_num(g1("주문가능총액"))
+        withdrawable = self._tr_num(g1("인출가능총액"))
+        fut_pl = self._tr_num(g1("선물평가손익"))
+        opt_pl = self._tr_num(g1("옵션평가손익"))
 
-        rq2 = "선물잔고"
+        rq2 = "선옵잔고"
         positions = []
-        eval_pl_sum = 0
         try:
-            self._tr_request(rq2, "opw20007", {
+            self._tr_request(rq2, "OPW20006", {
                 "계좌번호": acc,
                 "비밀번호": "",
+                "조회일자": datetime.now().strftime("%Y%m%d"),
                 "비밀번호입력매체구분": "00",
             }, "9102")
             cnt = self.ocx.dynamicCall(
-                "GetRepeatCnt(QString, QString)", "opw20007", rq2)
+                "GetRepeatCnt(QString, QString)", "OPW20006", rq2)
             for i in range(cnt):
-                g2 = lambda f: self._tr_get("opw20007", rq2, i, f)
-                qty = self._tr_num(g2("수량"))
+                g2 = lambda f: self._tr_get("OPW20006", rq2, i, f)
+                qty = self._tr_num(g2("잔고수량"))
                 if qty == 0:
                     continue
-                pl = self._tr_num(g2("평가손익"))
-                eval_pl_sum += pl
                 positions.append({
                     "code": g2("종목코드"),
                     "name": g2("종목명"),
-                    "side": g2("매도매수구분"),
+                    "side": g2("매매구분"),
                     "qty": qty,
-                    "avg_price": self._tr_num(g2("평균단가")),
+                    "avg_price": self._tr_num(g2("매입단가")),
                     "current_price": self._tr_num(g2("현재가")),
-                    "eval_pl": pl,
+                    "eval_pl": self._tr_num(g2("평가손익")),
+                    "pl_rate": self._tr_num(g2("손익율")),
+                    "eval_amount": self._tr_num(g2("평가금액")),
                 })
         except Exception as e:
-            log.warning("선물 잔고정밀(opw20007) 조회 실패: %s", e)
+            log.warning("선옵잔고상세(OPW20006) 조회 실패: %s", e)
 
+        # total: 순자산금액(평가손익 반영) 우선, 없으면 예탁총액
         return {
-            "total_krw": total,
-            "deposit_krw": deposit,
+            "total_krw": net_asset or deposit_total,
+            "deposit_total_krw": deposit_total,
+            "deposit_krw": deposit_cash,
             "margin_krw": margin,
-            "eval_pl_krw": eval_pl_sum,
+            "orderable_krw": orderable,
+            "withdrawable_krw": withdrawable,
+            "eval_pl_krw": fut_pl + opt_pl,
+            "futures_pl_krw": fut_pl,
+            "options_pl_krw": opt_pl,
             "positions": positions,
         }
 
@@ -241,19 +253,17 @@ class KiwoomDaemon:
             "옵션평가손익", "미수금", "수수료", "결제예정금액", "청산차금",
         ]
         cand07 = [
-            "종목코드", "종목번호", "종목명", "매도매수구분", "매매구분", "수량",
-            "보유수량", "평균단가", "매입단가", "현재가", "평가손익", "평가금액",
-            "손익율", "손익률", "청산가능수량", "매입금액", "약정금액", "매매손익",
-            "합계손익", "총평가손익",
+            "종목코드", "종목명", "매매일자", "매매구분", "잔고수량", "매입단가",
+            "매매금액", "현재가", "평가손익", "손익율", "평가금액",
         ]
 
         rq1 = "선물예수금탐색"
-        self._tr_request(rq1, "opw20010", {
+        self._tr_request(rq1, "OPW20010", {
             "계좌번호": acc, "비밀번호": "", "비밀번호입력매체구분": "00",
         }, "9103")
         found10 = {}
         for f in cand10:
-            v = self._tr_get("opw20010", rq1, 0, f)
+            v = self._tr_get("OPW20010", rq1, 0, f)
             if v:
                 found10[f] = v
 
@@ -261,20 +271,22 @@ class KiwoomDaemon:
         found07 = {}
         cnt = 0
         try:
-            self._tr_request(rq2, "opw20007", {
-                "계좌번호": acc, "비밀번호": "", "비밀번호입력매체구분": "00",
+            self._tr_request(rq2, "OPW20006", {
+                "계좌번호": acc, "비밀번호": "",
+                "조회일자": datetime.now().strftime("%Y%m%d"),
+                "비밀번호입력매체구분": "00",
             }, "9104")
             cnt = self.ocx.dynamicCall(
-                "GetRepeatCnt(QString, QString)", "opw20007", rq2)
+                "GetRepeatCnt(QString, QString)", "OPW20006", rq2)
             if cnt > 0:
                 for f in cand07:
-                    v = self._tr_get("opw20007", rq2, 0, f)
+                    v = self._tr_get("OPW20006", rq2, 0, f)
                     if v:
                         found07[f] = v
         except Exception as e:
             found07["_error"] = str(e)
 
-        return {"opw20010": found10, "opw20007": found07, "opw20007_rows": cnt}
+        return {"OPW20010": found10, "opw20006": found07, "opw20006_rows": cnt}
 
     # ---------------- 작업 처리 (Qt 스레드) ----------------
     def _drain_jobs(self):
