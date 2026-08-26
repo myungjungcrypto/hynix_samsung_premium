@@ -13,9 +13,15 @@
 
 엔드포인트 (X-Token 헤더 = 환경변수 KIWOOM_GW_TOKEN, 미설정 시 검사 생략):
   GET  /health                 로그인/계좌 상태
+  GET  /balance                선물옵션 계좌 잔고 (예탁총액/증거금/포지션)
   POST /order  {code, side: buy|sell, qty, price(0=시장가)}
   GET  /fill/<order_no>        누적 체결수량
   POST /cancel {order_no, code, qty}
+
+주문 잠금: /order·/cancel 은 KIWOOM_GW_ENABLE_ORDERS=1 일 때만 활성화되고,
+그 경우에도 localhost 요청만 허용한다. 잔고 조회 전용으로 쓸 때(기본값)는
+주문 경로가 403으로 차단되므로 다른 서버에 8899를 열어도 조회만 가능하다.
+원격 조회용 바인딩은 KIWOOM_GW_HOST=0.0.0.0 (보안그룹으로 소스 제한 필수).
 
 주식선물 주문: SendOrderFO
   ordKind 1=신규 3=취소 / slbyTp "1"매도 "2"매수 / ordTp "1"지정가 "3"시장가
@@ -56,6 +62,9 @@ _load_dotenv()
 
 TOKEN = os.environ.get("KIWOOM_GW_TOKEN", "")
 PORT = int(os.environ.get("KIWOOM_GW_PORT", "8899"))
+HOST = os.environ.get("KIWOOM_GW_HOST", "127.0.0.1")
+# 주문/취소 활성화 스위치 — 잔고 조회 전용 운용 시 0 유지 (기본)
+ENABLE_ORDERS = os.environ.get("KIWOOM_GW_ENABLE_ORDERS", "0") == "1"
 SCREEN = "9000"
 
 
@@ -66,6 +75,8 @@ class KiwoomDaemon:
         self.ocx.OnEventConnect.connect(self._on_connect)
         self.ocx.OnReceiveChejanData.connect(self._on_chejan)
         self.ocx.OnReceiveMsg.connect(self._on_msg)
+        self.ocx.OnReceiveTrData.connect(self._on_tr)
+        self._tr_loop = None
         self.connected = False
         self.account = ""
         self.fills = {}        # order_no -> {"qty": 누적수량, "value": 누적금액, "avg_px": 평균단가}
@@ -122,6 +133,98 @@ class KiwoomDaemon:
     def _on_msg(self, scr, rq, tr, msg):
         self.last_msg = msg
         log.info("MSG [%s] %s", rq, msg)
+
+    def _on_tr(self, scr, rqname, trcode, record, prev_next):
+        if self._tr_loop is not None and self._tr_loop.isRunning():
+            self._tr_loop.quit()
+
+    # ---------------- TR 조회 (Qt 스레드에서 실행됨) ----------------
+    def _tr_request(self, rqname, trcode, inputs, screen):
+        for k, v in inputs.items():
+            self.ocx.dynamicCall("SetInputValue(QString, QString)", k, v)
+        ret = self.ocx.dynamicCall(
+            "CommRqData(QString, QString, int, QString)", rqname, trcode, 0, screen)
+        if ret != 0:
+            raise RuntimeError(f"CommRqData 실패 ret={ret} ({rqname})")
+        self._tr_loop = QEventLoop()
+        QTimer.singleShot(10000, self._tr_loop.quit)  # 응답 유실 대비 타임아웃
+        self._tr_loop.exec_()
+        self._tr_loop = None
+
+    def _tr_get(self, trcode, rqname, idx, field):
+        return self.ocx.dynamicCall(
+            "GetCommData(QString, QString, int, QString)",
+            trcode, rqname, idx, field).strip()
+
+    @staticmethod
+    def _tr_num(s):
+        s = (s or "").replace(",", "").replace("+", "").strip()
+        if not s:
+            return 0
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return float(s)
+            except ValueError:
+                return 0
+
+    def _futures_balance(self):
+        """선물옵션 계좌 잔고 — 예수금상세(opw20010) + 잔고정밀(opw20007).
+
+        출력값이 전부 0이면 KOA Studio에서 두 TR의 출력 필드명을 확인해
+        아래 한글 필드명을 맞출 것. 계좌비밀번호는 트레이 AUTO 저장 상태면
+        빈 문자열로 통과된다.
+        """
+        acc = self.account
+        rq1 = "선물예수금"
+        self._tr_request(rq1, "opw20010", {
+            "계좌번호": acc,
+            "비밀번호": "",
+            "비밀번호입력매체구분": "00",
+        }, "9101")
+        g1 = lambda f: self._tr_get("opw20010", rq1, 0, f)
+        total = self._tr_num(g1("평가예탁총액"))
+        deposit = self._tr_num(g1("예수금"))
+        margin = self._tr_num(g1("위탁증거금총액")) or self._tr_num(g1("증거금총액"))
+
+        rq2 = "선물잔고"
+        positions = []
+        eval_pl_sum = 0
+        try:
+            self._tr_request(rq2, "opw20007", {
+                "계좌번호": acc,
+                "비밀번호": "",
+                "비밀번호입력매체구분": "00",
+            }, "9102")
+            cnt = self.ocx.dynamicCall(
+                "GetRepeatCnt(QString, QString)", "opw20007", rq2)
+            for i in range(cnt):
+                g2 = lambda f: self._tr_get("opw20007", rq2, i, f)
+                qty = self._tr_num(g2("수량"))
+                if qty == 0:
+                    continue
+                pl = self._tr_num(g2("평가손익"))
+                eval_pl_sum += pl
+                positions.append({
+                    "code": g2("종목코드"),
+                    "name": g2("종목명"),
+                    "side": g2("매도매수구분"),
+                    "qty": qty,
+                    "avg_price": self._tr_num(g2("평균단가")),
+                    "current_price": self._tr_num(g2("현재가")),
+                    "eval_pl": pl,
+                })
+        except Exception as e:
+            log.warning("선물 잔고정밀(opw20007) 조회 실패: %s", e)
+
+        return {
+            "total_krw": total,
+            "deposit_krw": deposit,
+            "margin_krw": margin,
+            "eval_pl_krw": eval_pl_sum,
+            "positions": positions,
+        }
 
     # ---------------- 작업 처리 (Qt 스레드) ----------------
     def _drain_jobs(self):
@@ -209,6 +312,11 @@ def _auth():
     return not TOKEN or request.headers.get("X-Token", "") == TOKEN
 
 
+def _order_allowed():
+    """주문 경로 이중 잠금: 스위치 켜짐 + localhost 요청만."""
+    return ENABLE_ORDERS and request.remote_addr in ("127.0.0.1", "::1")
+
+
 @flask_app.route("/health")
 def health():
     if not _auth():
@@ -216,10 +324,24 @@ def health():
     return jsonify(ok=True, connected=daemon.connected, account=daemon.account)
 
 
+@flask_app.route("/balance")
+def balance():
+    if not _auth():
+        return jsonify(ok=False, error="unauthorized"), 401
+    if not daemon.connected:
+        return jsonify(ok=False, error="키움 미로그인")
+    r = daemon.call(daemon._futures_balance, timeout=25)
+    if "error" in r and "value" not in r:
+        return jsonify(ok=False, error=r["error"])
+    return jsonify(ok=True, **r["value"])
+
+
 @flask_app.route("/order", methods=["POST"])
 def order():
     if not _auth():
         return jsonify(ok=False, error="unauthorized"), 401
+    if not _order_allowed():
+        return jsonify(ok=False, error="orders disabled (set KIWOOM_GW_ENABLE_ORDERS=1, localhost only)"), 403
     if not daemon.connected:
         return jsonify(ok=False, error="키움 미로그인")
     d = request.get_json(force=True)
@@ -263,6 +385,8 @@ def name(code):
 def cancel():
     if not _auth():
         return jsonify(ok=False, error="unauthorized"), 401
+    if not _order_allowed():
+        return jsonify(ok=False, error="orders disabled (set KIWOOM_GW_ENABLE_ORDERS=1, localhost only)"), 403
     d = request.get_json(force=True)
     r = daemon.call(daemon._cancel, d["order_no"], d["code"], int(d["qty"]))
     if "error" in r and "value" not in r:
@@ -272,10 +396,11 @@ def cancel():
 
 def main():
     threading.Thread(
-        target=lambda: flask_app.run(host="127.0.0.1", port=PORT, threaded=True),
+        target=lambda: flask_app.run(host=HOST, port=PORT, threaded=True),
         daemon=True).start()
     daemon.login()
-    log.info("kiwoom-daemon 시작: http://127.0.0.1:%d (로그인 창 확인)", PORT)
+    log.info("kiwoom-daemon 시작: http://%s:%d (주문 %s, 로그인 창 확인)",
+             HOST, PORT, "활성" if ENABLE_ORDERS else "차단됨")
     sys.exit(daemon.app.exec_())
 
 

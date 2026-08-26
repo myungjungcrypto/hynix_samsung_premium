@@ -72,6 +72,22 @@ KIWOOM_GW_TOKEN=아무긴문자열  # daemon과 봇 공유 (선택)
 07:30 재시작 이유: 키움 새벽 점검(~06:30) 후 세션 초기화 + 버전처리 반영.
 (기존 재시작 명령은 `schtasks /end /tn <이름>` 후 `/run`, 또는 PowerShell 스크립트로 kill+start)
 
+## 5.5 잔고 조회 게이트웨이 (perpdex_assets 연동)
+
+리눅스 EC2의 잔고 모니터(perpdex_assets)가 선물 계좌 잔고를 읽어가도록
+`GET /balance` 를 제공한다 (opw20010 예수금상세 + opw20007 잔고정밀).
+
+- **주문 잠금**: `/order`·`/cancel` 은 기본 **차단**. 자동매매를 다시 쓸 때만
+  `.env` 에 `KIWOOM_GW_ENABLE_ORDERS=1` 을 넣는다 (켜져 있어도 localhost 전용).
+- 원격 조회 허용 시 `.env`:
+  ```
+  KIWOOM_GW_HOST=0.0.0.0
+  KIWOOM_GW_TOKEN=긴랜덤문자열   # 반드시 설정 (미설정 시 무인증!)
+  ```
+- AWS 보안그룹: 인바운드 TCP 8899 소스를 **리눅스 EC2 사설 IP(/32)** 로만 허용.
+- 테스트: `curl http://127.0.0.1:8899/balance -H "X-Token: <토큰>"`
+  → 값이 전부 0이면 KOA Studio에서 opw20010/opw20007 출력 필드명 확인.
+
 ## 6. 검증 순서
 
 1. `curl http://127.0.0.1:8899/health` → `connected: true` 확인
