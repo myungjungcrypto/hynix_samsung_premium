@@ -18,6 +18,9 @@ trade.xyz (Hyperliquid xyz dex) perp vs KRX 현물 프리미엄 재정거래 알
   /z             SKHY/SKHX 프리미엄 z-스코어 실시간 조회 (scripts/skhy_z_alert.py 데이터)
   /open SKHX     해당 종목 상태를 '진입함'으로 수동 변경
   /flat SKHX     해당 종목 상태를 '청산함'으로 수동 변경
+  막힘 / 거절 / 열림 / 체결
+                 OI워처(~/variational_funding/oi_watch.py) 후보 알림에 대한 답장. 같은 봇 토큰을 쓰는
+                 이 프로세스만 getUpdates 를 소비하므로 여기서 받아 피드백 파일로 넘겨준다.
 """
 
 import json
@@ -34,6 +37,11 @@ KST = ZoneInfo("Asia/Seoul")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
+OI_FEEDBACK_PATH = os.environ.get(
+    "OI_WATCH_FEEDBACK",
+    os.path.join(os.path.expanduser("~"), "variational_funding", "oi_watch_feedback.json"),
+)
+OI_FEEDBACK_WORDS = {"막힘": "rejected", "거절": "rejected", "열림": "opened", "체결": "opened"}
 
 HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 NAVER_STOCK_URL = "https://polling.finance.naver.com/api/realtime/domestic/stock/{code}"
@@ -321,8 +329,19 @@ def handle_commands(tg, cmds, cfg, state, session):
                         f"봇 포지션: {pos} | 규칙: 진입 ±2 / 청산 ∓0.5 / 하드스톱 +3.5·55% (14d)")
             except Exception as e:
                 tg.send(f"z 조회 실패: {e}")
+        elif name in OI_FEEDBACK_WORDS:
+            # OI워처 답장 → 피드백 파일. 워처가 다음 루프(≤60s)에 답장 시각의 관측 스큐로 바닥/상한을 갱신한다.
+            verdict = OI_FEEDBACK_WORDS[name]
+            try:
+                os.makedirs(os.path.dirname(OI_FEEDBACK_PATH), exist_ok=True)
+                with open(OI_FEEDBACK_PATH, "w", encoding="utf-8") as f:
+                    json.dump({"verdict": verdict, "ts": time.time(), "text": cmd}, f, ensure_ascii=False)
+                tg.send("📝 OI워처에 전달: " + ("거절(막힘)" if verdict == "rejected" else "체결(열림)")
+                        + " — 1분 내 워처가 당시 스큐로 바닥/상한을 갱신하고 알려줍니다")
+            except Exception as e:
+                tg.send(f"OI워처 피드백 기록 실패: {e}")
         else:
-            tg.send("명령: status / z / open SKHX / flat SKHX (open·flat은 종목 SKHX 또는 SMSN)")
+            tg.send("명령: status / z / open SKHX / flat SKHX (open·flat은 종목 SKHX 또는 SMSN) / 막힘·열림 (OI워처 답장)")
 
 
 def check_pair(tg, cfg, state, pair, p, now_ts):
