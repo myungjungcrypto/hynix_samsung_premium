@@ -211,7 +211,8 @@ class KiwoomDaemon:
             raise RuntimeError("OPW20010 빈 응답 (0원으로 내보내지 않음)")
         g1 = v10.get
         deposit_total = self._tr_num(g1("예탁총액"))
-        net_asset = self._tr_num(g1("순자산금액"))
+        raw_net = g1("순자산금액")
+        net_asset = self._tr_num(raw_net) if raw_net else None   # 칸이 비면 None(숫자 0과 구별, funding_desk Codex #144 P2-7)
         deposit_cash = self._tr_num(g1("예탁현금"))
         margin = self._tr_num(g1("증거금총액"))
         orderable = self._tr_num(g1("주문가능총액"))
@@ -258,7 +259,8 @@ class KiwoomDaemon:
 
         # total: 순자산금액(평가손익 반영) 우선, 없으면 예탁총액
         return {
-            "total_krw": net_asset or deposit_total,
+            "total_krw": net_asset if net_asset is not None else deposit_total,
+            "net_asset_krw": net_asset,                          # 순자산금액 그대로(칸이 비면 null). desk는 이 값을 쓴다
             "deposit_total_krw": deposit_total,
             "deposit_krw": deposit_cash,
             "margin_krw": margin,
