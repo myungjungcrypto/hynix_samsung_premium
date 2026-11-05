@@ -239,7 +239,11 @@ class KiwoomDaemon:
             }, "9102", read06)
             for row in rows:
                 g2 = row.get
-                qty = self._tr_num(g2("잔고수량"))
+                raw_qty = g2("잔고수량")
+                if not raw_qty:                  # 칸이 빈 줄: 0주가 아니라 못 읽은 것(funding_desk Codex #144 P2-3)
+                    positions_error = positions_error or "잔고수량 칸 빈 값"
+                    continue
+                qty = self._tr_num(raw_qty)
                 if qty == 0:
                     continue
                 positions.append({
