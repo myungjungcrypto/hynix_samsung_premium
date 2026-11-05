@@ -10,12 +10,19 @@ function Log($msg) {
 }
 
 # .env에서 텔레그램 설정 로드
-$tgToken = ""; $tgChat = ""
+$tgToken = ""; $tgChat = ""; $gwToken = ""
 if (Test-Path "$root\.env") {
     foreach ($line in Get-Content "$root\.env" -Encoding UTF8) {
         if ($line -match '^TELEGRAM_BOT_TOKEN=(.+)$') { $tgToken = $Matches[1].Trim() }
         if ($line -match '^TELEGRAM_CHAT_ID=(.+)$') { $tgChat = $Matches[1].Trim() }
+        # 데몬과 같은 규칙: 앞뒤 공백·따옴표를 뗀다 (토큰이 있으면 /health도 X-Token이 필요하다)
+        if ($line -match '^\s*KIWOOM_GW_TOKEN\s*=(.*)$') { $gwToken = $Matches[1].Trim().Trim('"', "'") }
     }
+}
+# 시스템 환경변수가 .env보다 우선 (데몬 _load_dotenv와 같은 순서)
+foreach ($scope in 'Process', 'User', 'Machine') {
+    $v = [Environment]::GetEnvironmentVariable('KIWOOM_GW_TOKEN', $scope)
+    if ($v) { $gwToken = $v; break }
 }
 function Notify($msg) {
     Log "TG: $msg"
@@ -40,7 +47,9 @@ $botUp = ($procs | Where-Object { $_.CommandLine -like "*autotrader.main*" }) -n
 $daemonHealthy = $false
 if ($daemonUp) {
     try {
-        $h = Invoke-RestMethod -Uri "http://127.0.0.1:8899/health" -TimeoutSec 5
+        $hdr = @{}
+        if ($gwToken) { $hdr['X-Token'] = $gwToken }
+        $h = Invoke-RestMethod -Uri "http://127.0.0.1:8899/health" -Headers $hdr -TimeoutSec 5
         $daemonHealthy = $h.ok
     } catch { $daemonHealthy = $false }
 }
