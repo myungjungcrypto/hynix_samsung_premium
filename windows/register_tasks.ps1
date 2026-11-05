@@ -1,4 +1,4 @@
-# 작업 스케줄러 등록 — 관리자 PowerShell에서 1회 실행
+﻿# 작업 스케줄러 등록 — 관리자 PowerShell에서 1회 실행
 # 로그온 시 + 매일 아침(키움 점검 후) 자동 재시작. "로그온한 사용자로만 실행" (OCX 요건).
 $root = "C:\hynix_samsung_premium"
 New-Item -ItemType Directory -Force -Path "$root\logs" | Out-Null

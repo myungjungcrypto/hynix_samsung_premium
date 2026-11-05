@@ -86,6 +86,7 @@ class KiwoomDaemon:
         self.last_order_no = None
         self.last_msg = ""
         self.jobs = queue.Queue()
+        self._job_lock = threading.Lock()   # 시작 전 작업 버리기와 시작 표시를 가른다
         self.timer = QTimer()
         self.timer.timeout.connect(self._drain_jobs)
         self.timer.start(50)   # 50ms마다 작업큐 처리
@@ -220,6 +221,7 @@ class KiwoomDaemon:
 
         rq2 = "선옵잔고"
         positions = []
+        positions_error = ""
         try:
             f06 = ["종목코드", "종목명", "매매구분", "잔고수량", "매입단가",
                    "현재가", "평가손익", "손익율", "평가금액"]
@@ -252,6 +254,7 @@ class KiwoomDaemon:
                 })
         except Exception as e:
             log.warning("선옵잔고상세(OPW20006) 조회 실패: %s", e)
+            positions, positions_error = [], str(e) or type(e).__name__
 
         # total: 순자산금액(평가손익 반영) 우선, 없으면 예탁총액
         return {
@@ -265,6 +268,9 @@ class KiwoomDaemon:
             "futures_pl_krw": fut_pl,
             "options_pl_krw": opt_pl,
             "positions": positions,
+            # 포지션을 못 읽었으면 '포지션 없음'과 구별하게 한다
+            "positions_ok": not positions_error,
+            "positions_error": positions_error,
         }
 
     def _balance_probe(self):
@@ -315,6 +321,13 @@ class KiwoomDaemon:
         try:
             while True:
                 fn, args, done, result = self.jobs.get_nowait()
+                with self._job_lock:
+                    if result.get("abandoned"):
+                        # 호출한 쪽은 이미 실패를 받았다 — 늦게 실행하면 주문이 몰래 나간다
+                        log.warning("시간 초과로 버린 작업은 실행하지 않음: %s", getattr(fn, "__name__", fn))
+                        done.set()
+                        continue
+                    result["started"] = True
                 try:
                     result["value"] = fn(*args)
                 except Exception as e:
@@ -323,14 +336,24 @@ class KiwoomDaemon:
         except queue.Empty:
             pass
 
-    def call(self, fn, *args, timeout=10):
-        """Flask 스레드 → Qt 스레드 호출."""
+    def call(self, fn, *args, timeout=10, run_grace=4):
+        """Flask 스레드 → Qt 스레드 호출.
+
+        timeout 안에 시작하지 못한 작업은 버린다 (실패라고 답한 주문이 나중에 나가지 않게).
+        이미 시작한 작업은 run_grace초 더 기다린다 (_send_order는 주문번호를 최대 3초 기다림).
+        """
         done = threading.Event()
         result = {}
         self.jobs.put((fn, args, done, result))
-        if not done.wait(timeout):
-            return {"error": "Qt 스레드 응답 없음"}
-        return result
+        if done.wait(timeout):
+            return result
+        with self._job_lock:
+            if not result.get("started"):
+                result["abandoned"] = True
+                return {"error": "Qt 스레드 응답 없음 (시작 전이라 실행하지 않음)"}
+        if done.wait(run_grace):
+            return result
+        return {"error": "Qt 스레드 응답 없음 (실행 중, 결과 모름)"}
 
     # ---------------- 주문 함수 (Qt 스레드에서 실행됨) ----------------
     def _send_order(self, code, side, qty, price):

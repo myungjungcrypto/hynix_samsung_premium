@@ -1,4 +1,4 @@
-# 워치독 스케줄 등록 — 관리자 PowerShell에서 1회 실행
+﻿# 워치독 스케줄 등록 — 관리자 PowerShell에서 1회 실행
 $root = "C:\hynix_samsung_premium"
 
 schtasks /delete /tn "trading-watchdog" /f 2>$null
