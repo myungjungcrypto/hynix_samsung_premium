@@ -240,7 +240,10 @@ class KiwoomDaemon:
             for row in rows:
                 g2 = row.get
                 raw_qty = g2("잔고수량")
-                if not raw_qty:                  # 칸이 빈 줄: 0주가 아니라 못 읽은 것(funding_desk Codex #144 P2-3)
+                if not raw_qty:
+                    if not g2("종목코드"):         # 종목코드까지 빈 줄은 빈 칸 채움(보유 없음)으로 건너뛴다
+                        continue
+                    # 종목은 있는데 수량 칸만 빈 줄: 0주가 아니라 못 읽은 것(funding_desk Codex #144 P2-3)
                     positions_error = positions_error or "잔고수량 칸 빈 값"
                     continue
                 qty = self._tr_num(raw_qty)
