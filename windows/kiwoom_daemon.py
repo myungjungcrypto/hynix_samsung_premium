@@ -78,12 +78,15 @@ class KiwoomDaemon:
         self.ocx.OnReceiveMsg.connect(self._on_msg)
         self.ocx.OnReceiveTrData.connect(self._on_tr)
         self._tr_loop = None
+        self._tr_pending = None   # (rqname, reader): 핸들러 안에서 읽는다
+        self._tr_result = None
         self.connected = False
         self.account = ""
         self.fills = {}        # order_no -> {"qty": 누적수량, "value": 누적금액, "avg_px": 평균단가}
         self.last_order_no = None
         self.last_msg = ""
         self.jobs = queue.Queue()
+        self._job_lock = threading.Lock()   # 시작 전 작업 버리기와 시작 표시를 가른다
         self.timer = QTimer()
         self.timer.timeout.connect(self._drain_jobs)
         self.timer.start(50)   # 50ms마다 작업큐 처리
@@ -135,22 +138,40 @@ class KiwoomDaemon:
         self.last_msg = msg
         log.info("MSG [%s] %s", rq, msg)
 
-    def _on_tr(self, scr, rqname, trcode, record, prev_next):
+    def _on_tr(self, scr, rqname, trcode, record, prev_next, *rest):
+        p = self._tr_pending
+        if p is None or rqname != p[0]:
+            return
+        try:
+            # GetCommData/GetRepeatCnt는 이 이벤트 안에서, 이벤트가 준 trcode·rqname으로 읽는다
+            self._tr_result = p[1](trcode, rqname)
+        except Exception as e:  # 예외를 OCX로 돌려보내지 않는다
+            self._tr_result = e
+        self._tr_pending = None
         if self._tr_loop is not None and self._tr_loop.isRunning():
             self._tr_loop.quit()
 
     # ---------------- TR 조회 (Qt 스레드에서 실행됨) ----------------
-    def _tr_request(self, rqname, trcode, inputs, screen):
+    def _tr_request(self, rqname, trcode, inputs, screen, reader):
+        self._tr_pending, self._tr_result = (rqname, reader), None
         for k, v in inputs.items():
             self.ocx.dynamicCall("SetInputValue(QString, QString)", k, v)
         ret = self.ocx.dynamicCall(
             "CommRqData(QString, QString, int, QString)", rqname, trcode, 0, screen)
         if ret != 0:
+            self._tr_pending = None
             raise RuntimeError(f"CommRqData 실패 ret={ret} ({rqname})")
-        self._tr_loop = QEventLoop()
-        QTimer.singleShot(10000, self._tr_loop.quit)  # 응답 유실 대비 타임아웃
-        self._tr_loop.exec_()
-        self._tr_loop = None
+        if self._tr_pending is not None:
+            self._tr_loop = QEventLoop()
+            QTimer.singleShot(10000, self._tr_loop.quit)  # 응답 유실 대비 타임아웃
+            self._tr_loop.exec_()
+            self._tr_loop = None
+        if self._tr_pending is not None:
+            self._tr_pending = None
+            raise TimeoutError(f"TR 응답 없음 ({rqname})")
+        if isinstance(self._tr_result, Exception):
+            raise self._tr_result
+        return self._tr_result
 
     def _tr_get(self, trcode, rqname, idx, field):
         return self.ocx.dynamicCall(
@@ -179,12 +200,16 @@ class KiwoomDaemon:
         """
         acc = self.account
         rq1 = "선옵예탁금"
-        self._tr_request(rq1, "OPW20010", {
+        f10 = ["예탁총액", "순자산금액", "예탁현금", "증거금총액", "주문가능총액",
+               "인출가능총액", "선물평가손익", "옵션평가손익"]
+        v10 = self._tr_request(rq1, "OPW20010", {
             "계좌번호": acc,
             "비밀번호": "",
             "비밀번호입력매체구분": "00",
-        }, "9101")
-        g1 = lambda f: self._tr_get("OPW20010", rq1, 0, f)
+        }, "9101", lambda tc, rq: {f: self._tr_get(tc, rq, 0, f) for f in f10})
+        if not (v10["예탁총액"] or v10["순자산금액"]):
+            raise RuntimeError("OPW20010 빈 응답 (0원으로 내보내지 않음)")
+        g1 = v10.get
         deposit_total = self._tr_num(g1("예탁총액"))
         net_asset = self._tr_num(g1("순자산금액"))
         deposit_cash = self._tr_num(g1("예탁현금"))
@@ -196,17 +221,23 @@ class KiwoomDaemon:
 
         rq2 = "선옵잔고"
         positions = []
+        positions_error = ""
         try:
-            self._tr_request(rq2, "OPW20006", {
+            f06 = ["종목코드", "종목명", "매매구분", "잔고수량", "매입단가",
+                   "현재가", "평가손익", "손익율", "평가금액"]
+
+            def read06(tc, rq):
+                n = self.ocx.dynamicCall("GetRepeatCnt(QString, QString)", tc, rq)
+                return [{f: self._tr_get(tc, rq, i, f) for f in f06} for i in range(n)]
+
+            rows = self._tr_request(rq2, "OPW20006", {
                 "계좌번호": acc,
                 "비밀번호": "",
                 "조회일자": datetime.now().strftime("%Y%m%d"),
                 "비밀번호입력매체구분": "00",
-            }, "9102")
-            cnt = self.ocx.dynamicCall(
-                "GetRepeatCnt(QString, QString)", "OPW20006", rq2)
-            for i in range(cnt):
-                g2 = lambda f: self._tr_get("OPW20006", rq2, i, f)
+            }, "9102", read06)
+            for row in rows:
+                g2 = row.get
                 qty = self._tr_num(g2("잔고수량"))
                 if qty == 0:
                     continue
@@ -223,6 +254,7 @@ class KiwoomDaemon:
                 })
         except Exception as e:
             log.warning("선옵잔고상세(OPW20006) 조회 실패: %s", e)
+            positions, positions_error = [], str(e) or type(e).__name__
 
         # total: 순자산금액(평가손익 반영) 우선, 없으면 예탁총액
         return {
@@ -236,6 +268,9 @@ class KiwoomDaemon:
             "futures_pl_krw": fut_pl,
             "options_pl_krw": opt_pl,
             "positions": positions,
+            # 포지션을 못 읽었으면 '포지션 없음'과 구별하게 한다
+            "positions_ok": not positions_error,
+            "positions_error": positions_error,
         }
 
     def _balance_probe(self):
@@ -258,31 +293,24 @@ class KiwoomDaemon:
         ]
 
         rq1 = "선물예수금탐색"
-        self._tr_request(rq1, "OPW20010", {
+        found10 = self._tr_request(rq1, "OPW20010", {
             "계좌번호": acc, "비밀번호": "", "비밀번호입력매체구분": "00",
-        }, "9103")
-        found10 = {}
-        for f in cand10:
-            v = self._tr_get("OPW20010", rq1, 0, f)
-            if v:
-                found10[f] = v
+        }, "9103", lambda tc, rq: {f: v for f in cand10 for v in [self._tr_get(tc, rq, 0, f)] if v})
 
         rq2 = "선물잔고탐색"
         found07 = {}
         cnt = 0
         try:
-            self._tr_request(rq2, "OPW20006", {
+            def read07(tc, rq):
+                n = self.ocx.dynamicCall("GetRepeatCnt(QString, QString)", tc, rq)
+                row = {f: v for f in cand07 for v in [self._tr_get(tc, rq, 0, f)] if v} if n > 0 else {}
+                return n, row
+
+            cnt, found07 = self._tr_request(rq2, "OPW20006", {
                 "계좌번호": acc, "비밀번호": "",
                 "조회일자": datetime.now().strftime("%Y%m%d"),
                 "비밀번호입력매체구분": "00",
-            }, "9104")
-            cnt = self.ocx.dynamicCall(
-                "GetRepeatCnt(QString, QString)", "OPW20006", rq2)
-            if cnt > 0:
-                for f in cand07:
-                    v = self._tr_get("OPW20006", rq2, 0, f)
-                    if v:
-                        found07[f] = v
+            }, "9104", read07)
         except Exception as e:
             found07["_error"] = str(e)
 
@@ -293,6 +321,13 @@ class KiwoomDaemon:
         try:
             while True:
                 fn, args, done, result = self.jobs.get_nowait()
+                with self._job_lock:
+                    if result.get("abandoned"):
+                        # 호출한 쪽은 이미 실패를 받았다 — 늦게 실행하면 주문이 몰래 나간다
+                        log.warning("시간 초과로 버린 작업은 실행하지 않음: %s", getattr(fn, "__name__", fn))
+                        done.set()
+                        continue
+                    result["started"] = True
                 try:
                     result["value"] = fn(*args)
                 except Exception as e:
@@ -301,14 +336,24 @@ class KiwoomDaemon:
         except queue.Empty:
             pass
 
-    def call(self, fn, *args, timeout=10):
-        """Flask 스레드 → Qt 스레드 호출."""
+    def call(self, fn, *args, timeout=10, run_grace=4):
+        """Flask 스레드 → Qt 스레드 호출.
+
+        timeout 안에 시작하지 못한 작업은 버린다 (실패라고 답한 주문이 나중에 나가지 않게).
+        이미 시작한 작업은 run_grace초 더 기다린다 (_send_order는 주문번호를 최대 3초 기다림).
+        """
         done = threading.Event()
         result = {}
         self.jobs.put((fn, args, done, result))
-        if not done.wait(timeout):
-            return {"error": "Qt 스레드 응답 없음"}
-        return result
+        if done.wait(timeout):
+            return result
+        with self._job_lock:
+            if not result.get("started"):
+                result["abandoned"] = True
+                return {"error": "Qt 스레드 응답 없음 (시작 전이라 실행하지 않음)"}
+        if done.wait(run_grace):
+            return result
+        return {"error": "Qt 스레드 응답 없음 (실행 중, 결과 모름)"}
 
     # ---------------- 주문 함수 (Qt 스레드에서 실행됨) ----------------
     def _send_order(self, code, side, qty, price):

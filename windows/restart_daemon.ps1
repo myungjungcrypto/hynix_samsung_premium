@@ -1,4 +1,4 @@
-# 키움 데몬 재시작 (로그는 앱이 직접 logs\daemon.log에 이어씀)
+﻿# 키움 데몬 재시작 (로그는 앱이 직접 logs\daemon.log에 이어씀)
 $root = "C:\hynix_samsung_premium"
 
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |

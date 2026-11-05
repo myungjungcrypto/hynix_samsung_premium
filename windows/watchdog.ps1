@@ -1,4 +1,4 @@
-# 자가치유 워치독 — 5분마다 실행 (스케줄 작업)
+﻿# 자가치유 워치독 — 5분마다 실행 (스케줄 작업)
 # 데몬/봇이 죽어있으면 재기동하고 텔레그램으로 통보. 메모리 잔량도 기록.
 $root = "C:\hynix_samsung_premium"
 $log = "$root\logs\watchdog.log"
@@ -10,13 +10,17 @@ function Log($msg) {
 }
 
 # .env에서 텔레그램 설정 로드
-$tgToken = ""; $tgChat = ""
+$tgToken = ""; $tgChat = ""; $gwToken = ""; $gwSeen = $false
 if (Test-Path "$root\.env") {
     foreach ($line in Get-Content "$root\.env" -Encoding UTF8) {
         if ($line -match '^TELEGRAM_BOT_TOKEN=(.+)$') { $tgToken = $Matches[1].Trim() }
         if ($line -match '^TELEGRAM_CHAT_ID=(.+)$') { $tgChat = $Matches[1].Trim() }
+        # 데몬과 같은 규칙: 첫 줄만, 앞뒤 공백·따옴표를 뗀다 (토큰이 있으면 /health도 X-Token이 필요하다)
+        if (-not $gwSeen -and $line -match '^\s*KIWOOM_GW_TOKEN\s*=(.*)$') { $gwToken = $Matches[1].Trim().Trim('"', "'"); $gwSeen = $true }
     }
 }
+# 프로세스 환경변수가 .env보다 우선 (데몬 _load_dotenv와 같은 순서, 워치독이 띄운 데몬은 이 환경을 물려받는다)
+if ($env:KIWOOM_GW_TOKEN) { $gwToken = $env:KIWOOM_GW_TOKEN }
 function Notify($msg) {
     Log "TG: $msg"
     if ($tgToken -and $tgChat) {
@@ -40,7 +44,9 @@ $botUp = ($procs | Where-Object { $_.CommandLine -like "*autotrader.main*" }) -n
 $daemonHealthy = $false
 if ($daemonUp) {
     try {
-        $h = Invoke-RestMethod -Uri "http://127.0.0.1:8899/health" -TimeoutSec 5
+        $hdr = @{}
+        if ($gwToken) { $hdr['X-Token'] = $gwToken }
+        $h = Invoke-RestMethod -Uri "http://127.0.0.1:8899/health" -Headers $hdr -TimeoutSec 5
         $daemonHealthy = $h.ok
     } catch { $daemonHealthy = $false }
 }
