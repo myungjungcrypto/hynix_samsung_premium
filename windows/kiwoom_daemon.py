@@ -27,9 +27,11 @@
   ordKind 1=신규 3=취소 / slbyTp "1"매도 "2"매수 / ordTp "1"지정가 "3"시장가
 """
 import logging
+import math
 import os
 from datetime import datetime
 import queue
+import re
 import sys
 import threading
 
@@ -191,6 +193,18 @@ class KiwoomDaemon:
             except ValueError:
                 return 0
 
+    @staticmethod
+    def _tr_amount(raw):
+        """순자산·수량에 쓸 유한한 숫자만 읽는다. 빈 칸·해석 실패는 None이다."""
+        text = (raw or "").strip()
+        if not re.fullmatch(r"[+-]?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?", text):
+            return None
+        text = text.replace(",", "")
+        if "." not in text:
+            return int(text)
+        value = float(text)
+        return value if math.isfinite(value) else None
+
     def _futures_balance(self):
         """선물옵션 계좌 잔고 — KOA Studio 실스펙 기준.
 
@@ -207,12 +221,11 @@ class KiwoomDaemon:
             "비밀번호": "",
             "비밀번호입력매체구분": "00",
         }, "9101", lambda tc, rq: {f: self._tr_get(tc, rq, 0, f) for f in f10})
-        if not (v10["예탁총액"] or v10["순자산금액"]):
-            raise RuntimeError("OPW20010 빈 응답 (0원으로 내보내지 않음)")
         g1 = v10.get
-        deposit_total = self._tr_num(g1("예탁총액"))
-        raw_net = g1("순자산금액")
-        net_asset = self._tr_num(raw_net) if raw_net else None   # 칸이 비면 None(숫자 0과 구별, funding_desk Codex #144 P2-7)
+        deposit_total = self._tr_amount(g1("예탁총액"))
+        net_asset = self._tr_amount(g1("순자산금액"))
+        if deposit_total is None and net_asset is None:
+            raise RuntimeError("OPW20010 빈 응답 (예탁총액·순자산금액 확인 불가)")
         deposit_cash = self._tr_num(g1("예탁현금"))
         margin = self._tr_num(g1("증거금총액"))
         orderable = self._tr_num(g1("주문가능총액"))
@@ -239,18 +252,21 @@ class KiwoomDaemon:
             }, "9102", read06)
             for row in rows:
                 g2 = row.get
+                code = g2("종목코드")
                 raw_qty = g2("잔고수량")
-                if not raw_qty:
-                    if not g2("종목코드"):         # 종목코드까지 빈 줄은 빈 칸 채움(보유 없음)으로 건너뛴다
-                        continue
-                    # 종목은 있는데 수량 칸만 빈 줄: 0주가 아니라 못 읽은 것(funding_desk Codex #144 P2-3)
-                    positions_error = positions_error or "잔고수량 칸 빈 값"
+                if not raw_qty and not code:        # 빈 칸 채움(보유 없음)
                     continue
-                qty = self._tr_num(raw_qty)
+                qty = self._tr_amount(raw_qty)
+                if qty is None:
+                    positions_error = positions_error or "잔고수량 확인 불가"
+                    continue
                 if qty == 0:
                     continue
+                if not code:
+                    positions_error = positions_error or "종목코드 확인 불가"
+                    continue
                 positions.append({
-                    "code": g2("종목코드"),
+                    "code": code,
                     "name": g2("종목명"),
                     "side": g2("매매구분"),
                     "qty": qty,
@@ -267,7 +283,7 @@ class KiwoomDaemon:
         # total: 순자산금액(평가손익 반영) 우선, 없으면 예탁총액
         return {
             "total_krw": net_asset if net_asset is not None else deposit_total,
-            "net_asset_krw": net_asset,                          # 순자산금액 그대로(칸이 비면 null). desk는 이 값을 쓴다
+            "net_asset_krw": net_asset,                          # 순자산금액을 못 읽으면 null. desk는 이 값을 쓴다
             "deposit_total_krw": deposit_total,
             "deposit_krw": deposit_cash,
             "margin_krw": margin,
